@@ -1,0 +1,19 @@
+# Model Files and AI/ML artifacts
+*.engine
+*.plan
+*.bin
+*.onnx
+*.pth
+*.pt
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.pb
+*.tflite
+*.mlmodel
+*.coreml
+*.caffemodel
+*.prototxt
+*.weights
+*.cfg
