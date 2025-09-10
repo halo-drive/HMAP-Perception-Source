@@ -1,0 +1,12 @@
+{
+    "rig": {
+        "sensors": [
+            { "json-merge": "rig/can.json" },
+            { "json-merge": "rig/imu-novatel.json" },
+            { "json-merge": "rig/gps-novatel.json" },
+            { "json-merge": "rig/camera-front-gmsl.json" }
+        ],
+        "vehicle": { "json-merge": "rig/vehicle-kia-eniro.json" }
+    },
+    "version": 6
+}
