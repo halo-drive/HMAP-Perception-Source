@@ -1,0 +1,62 @@
+
+        
+       DLA Standalone build and loadable Commands 
+        
+# with chw16 format 
+
+trtexec --onnx=/home/pomo/yolov8n-seg-lane-train2.onnx \
+        --saveEngine=/home/pomo/trt-export/v8n-seg-lane-fp16_dla.trt \
+        --buildDLAStandalone \
+        --fp16 \
+        --inputIOFormats=fp16:chw16 \
+        --outputIOFormats=fp16:chw16 \
+        --memPoolSize=workspace:8192
+        
+trtexec --loadEngine=/home/pomo/trt-export/v8n-seg-lane-fp16_dla.trt \
+        --useDLACore=0 \
+        --dumpLayerInfo \
+        --dumpProfile \
+        --exportLayerInfo=yolov8_seg_dlafp16_layers.json \
+        --exportProfile=yolov8_seg_dlafp16_profile.json \
+        --profilingVerbosity=detailed \
+        --verbose \
+        --iterations=100 \
+        --avgRuns=10 \
+        --warmUp=5 \
+        > yolov8_seg_dlafp16_analysis.log 2>&1
+        
+        
+        
+        
+        
+        
+        GPU standalone build and lodable (DLA loadable) commands
+        
+trtexec --onnx=/home/pomo/yolov8n-seg-lane-train2.onnx \
+        --saveEngine=/home/pomo/trt-export/v8n-seg-lane-fp16_gpu.trt \
+        --fp16 \
+        --workspace=8192 \
+        --profilingVerbosity=detailed \
+        --verbose
+        
+      
+trtexec --loadEngine=/home/pomo/trt-export/v8n-seg-lane-fp16_gpu.trt \
+        --useDLACore=0 \
+        --dumpLayerInfo \
+        --dumpProfile \
+        --exportLayerInfo=yolov8_seg_gpu_dla_layers.json \
+        --exportProfile=yolov8_seg_gpu_dla_profile.json \
+        --profilingVerbosity=detailed \
+        --verbose \
+        --iterations=100 \
+        --avgRuns=10 \
+        --warmUp=5 \
+        > yolov8_seg_gpu_dla_analysis.log 2>&1
+
+
+//tensorrt_optimisation tool use :
+
+/usr/local/driveworks/tools/dnn/tensorRT_optimization --modelType=onnx --onnxFile=/home/pomo/onnx-models/yolov8n-seg-lane-train2.onnx  --out=/home/pomo/trt-export/yololane.dla --useDLA=0 --dlaLoadable=/home/pomo/trt-export/ --iterations=100 --verbose=1
+
+
+
