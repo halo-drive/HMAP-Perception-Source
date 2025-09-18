@@ -1668,27 +1668,30 @@ public:
         tempBlackImages.push_back(std::move(blackImage));
     }
     
-    // BEVFusion index 0 (FRONT) - black image
+    // BEVFusion camera mapping based on your 4camera_1lidar.json:
+    // Your rig: 0=front_left, 1=front_right, 2=back_left, 3=back_right
+    
+    // BEVFusion index 0 (FRONT) - black image (not in your rig)
     cameraImages[0] = tempBlackImages[0].get();
     
-    // BEVFusion index 1 (FRONT_RIGHT) - rig camera 0
-    cameraImages[1] = (m_cameras.size() > 0 && !m_cameras[0].isBlackImage) ? 
-                      getCameraFrame(0) : tempBlackImages[1].get();
+    // BEVFusion index 1 (FRONT_RIGHT) - rig camera:front_right (index 1)
+    cameraImages[1] = (m_cameras.size() > 1 && !m_cameras[1].isBlackImage) ? 
+                      getCameraFrame(1) : tempBlackImages[1].get();
     
-    // BEVFusion index 2 (FRONT_LEFT) - rig camera 3
-    cameraImages[2] = (m_cameras.size() > 3 && !m_cameras[3].isBlackImage) ? 
-                      getCameraFrame(3) : tempBlackImages[2].get();
+    // BEVFusion index 2 (FRONT_LEFT) - rig camera:front_left (index 0)
+    cameraImages[2] = (m_cameras.size() > 0 && !m_cameras[0].isBlackImage) ? 
+                      getCameraFrame(0) : tempBlackImages[2].get();
     
-    // BEVFusion index 3 (BACK) - black image
+    // BEVFusion index 3 (BACK) - black image (not in your rig)
     cameraImages[3] = tempBlackImages[3].get();
     
-    // BEVFusion index 4 (BACK_LEFT) - rig camera 2
+    // BEVFusion index 4 (BACK_LEFT) - rig camera:back_left (index 2)
     cameraImages[4] = (m_cameras.size() > 2 && !m_cameras[2].isBlackImage) ? 
                       getCameraFrame(2) : tempBlackImages[4].get();
     
-    // BEVFusion index 5 (BACK_RIGHT) - rig camera 1
-    cameraImages[5] = (m_cameras.size() > 1 && !m_cameras[1].isBlackImage) ? 
-                      getCameraFrame(1) : tempBlackImages[5].get();
+    // BEVFusion index 5 (BACK_RIGHT) - rig camera:back_right (index 3)
+    cameraImages[5] = (m_cameras.size() > 3 && !m_cameras[3].isBlackImage) ? 
+                      getCameraFrame(3) : tempBlackImages[5].get();
     
     // Get LiDAR data
     if (m_enableLogging) {
@@ -2408,8 +2411,17 @@ public:
     // Note: Don't clear camera projections here - they contain current frame's bounding boxes
     
     // BEVFusion order mapping for display
-    // BEVFusion index -> Rig camera index (for display)
-    int rigCameraMapping[MAX_CAMERAS] = {-1, 0, 3, -1, 2, 1}; // -1 means black image
+    // BEVFusion index -> Rig camera index (based on your 4camera_1lidar.json)
+    // Your rig: 0=front_left, 1=front_right, 2=back_left, 3=back_right
+    // BEVFusion: 0=FRONT, 1=FRONT_RIGHT, 2=FRONT_LEFT, 3=BACK, 4=BACK_LEFT, 5=BACK_RIGHT
+    int rigCameraMapping[MAX_CAMERAS] = {-1, 1, 0, -1, 2, 3}; 
+    // -1 = black image (no camera in rig)
+    // BEVFusion FRONT(0) → black image
+    // BEVFusion FRONT_RIGHT(1) → rig camera:front_right(1)  
+    // BEVFusion FRONT_LEFT(2) → rig camera:front_left(0)
+    // BEVFusion BACK(3) → black image
+    // BEVFusion BACK_LEFT(4) → rig camera:back_left(2)
+    // BEVFusion BACK_RIGHT(5) → rig camera:back_right(3)
     
     for (uint32_t i = 0; i < MAX_CAMERAS; i++) {
     try {
@@ -2417,14 +2429,17 @@ public:
     dwRenderEngine_setTile(m_tileCameras[i], m_renderEngine);
     dwRenderEngine_resetTile(m_renderEngine);
     
-    // Project 3D bounding boxes to 2D camera coordinates
-    if (m_enableLogging && m_frameCount % 60 == 0 && i == 0) {
-        log("About to call projectBoundingBoxesToCamera for camera %d with %zu bboxes\n", i, m_lastBboxes.size());
-    }
-    projectBoundingBoxesToCamera(i, m_lastBboxes);
-    
     // Get the rig camera index for this BEVFusion index
     int rigCameraIndex = rigCameraMapping[i];
+    
+    // Project 3D bounding boxes to 2D camera coordinates (use rig camera index for consistency)
+    if (m_enableLogging && m_frameCount % 60 == 0 && i == 0) {
+        log("About to call projectBoundingBoxesToCamera for BEVFusion camera %d (rig camera %d) with %zu bboxes\n", i, rigCameraIndex, m_lastBboxes.size());
+    }
+    
+    // CRITICAL FIX: Project to ALL cameras (including black image cameras)
+    // Use BEVFusion camera index for projection (consistent with transformation matrices)
+    projectBoundingBoxesToCamera(i, m_lastBboxes);
     
     // Stream camera image to GL (use rig camera index for display)
     if (rigCameraIndex >= 0 && rigCameraIndex < static_cast<int>(m_cameras.size())) {
@@ -2448,7 +2463,7 @@ public:
         CHECK_DW_ERROR(dwRenderEngine_setCoordinateRange2D(range, m_renderEngine));
         CHECK_DW_ERROR(dwRenderEngine_renderImage2D(imageGL, {0, 0, range.x, range.y}, m_renderEngine));
         
-        // Render projected bounding boxes on camera feed
+        // Render projected bounding boxes on camera feed (use BEVFusion index for consistency)
         renderCameraBoundingBoxes(i, range);
         
         // Return GL image
@@ -2488,6 +2503,9 @@ public:
         range.y = imageGL->prop.height;
         CHECK_DW_ERROR(dwRenderEngine_setCoordinateRange2D(range, m_renderEngine));
         CHECK_DW_ERROR(dwRenderEngine_renderImage2D(imageGL, {0, 0, range.x, range.y}, m_renderEngine));
+        
+        // CRITICAL FIX: Render projected bounding boxes on black image cameras too
+        renderCameraBoundingBoxes(i, range);
         
         // Return GL image
         CHECK_DW_ERROR(dwImageStreamerGL_consumerReturn(&frameGL, m_streamerToGL[i]));
