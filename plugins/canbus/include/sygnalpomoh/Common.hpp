@@ -12,8 +12,8 @@ namespace sygnalpomo {
 //------------------------------------------------------------------------------
 constexpr uint32_t PLUGIN_VERSION_MAJOR = 1;
 constexpr uint32_t PLUGIN_VERSION_MINOR = 1;  // Updated for optimized version
-constexpr uint32_t PLUGIN_VERSION_PATCH = 0;
-
+constexpr uint32_t PLUGIN_VERSION_PATCH = 2;
+constexpr const char* PLUGIN_VERSION_STRING = "1.0.2-SygnalPomoDriver";
 //------------------------------------------------------------------------------
 // CAN-Specific Constants (updated based on empirical testing)
 //------------------------------------------------------------------------------

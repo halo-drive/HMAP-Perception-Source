@@ -85,6 +85,25 @@ dwStatus _dwSensorPlugin_createSensor(const char* params,
 }
 
 
+//versio calls 
+dwStatus _dwSensorPlugin_getSensorInformation(dwSensorPlugin_information* information, 
+                                             dwSensorPluginSensorHandle_t handle) {
+    if (!information) {
+        std::cerr << "[PLUGIN ERROR] Null information pointer provided" << std::endl;
+        return DW_INVALID_ARGUMENT;
+    }
+
+    if (!isValidSensor(handle)) {
+        std::cerr << "[PLUGIN ERROR] Invalid sensor handle provided to getSensorInformation" << std::endl;
+        return DW_INVALID_HANDLE;
+    }
+
+    std::cout << "[PLUGIN DEBUG] Getting sensor information for handle: " << handle << std::endl;
+    
+    auto* driver = static_cast<sygnalpomo::SygnalPomoDriver*>(handle);
+    return driver->getSensorInformation(information);
+}
+
 // Start Sensor
 dwStatus _dwSensorPlugin_start(dwSensorPluginSensorHandle_t handle) {
     auto* driver = static_cast<sygnalpomo::SygnalPomoDriver*>(handle);
@@ -246,7 +265,7 @@ dwStatus dwSensorCANPlugin_getFunctionTable(dwSensorCANPluginFunctionTable* func
     if (!functions) {
         return DW_INVALID_ARGUMENT;
     }
-
+    //plugin common functions
     functions->common.createHandle = _dwSensorPlugin_createHandle;
     functions->common.createSensor = _dwSensorPlugin_createSensor;
     functions->common.start = _dwSensorPlugin_start;
@@ -255,13 +274,25 @@ dwStatus dwSensorCANPlugin_getFunctionTable(dwSensorCANPluginFunctionTable* func
     functions->common.release = _dwSensorPlugin_release;
     functions->common.readRawData = _dwSensorPlugin_readRawData;
     functions->common.returnRawData = _dwSensorPlugin_returnRawData;
-    
 
+    //version call
+    functions->common.getSensorInformation = _dwSensorPlugin_getSensorInformation;
+
+
+    //unused common functions
+    functions->common.pushData = nullptr;
+    functions->common.getRawPackets = nullptr;
+    functions->common.getRawPacketsNew = nullptr;
+    functions->common.rawDataReadyForDecode = nullptr;
+    
+    //CAN-specific functions
     functions->setFilter = _dwSensorPlugin_setFilter;
     functions->clearFilter = _dwSensorPlugin_clearFilter;
     functions->setUseHwTimestamps = _dwSensorPlugin_setUseHwTimestamps;
     functions->send = _dwSensorCANPlugin_send;
     functions->parseDataBuffer = _dwSensorCANPlugin_parseDataBuffer;
+
+    std::cout << "[PLUGIN DEBUG] Function table populated with sensor information support" << std::endl;
     return DW_SUCCESS;
 }
 }

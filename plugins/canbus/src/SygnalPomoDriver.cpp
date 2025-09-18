@@ -14,6 +14,7 @@
 #include <thread>
 #include <chrono>
 #include <map>
+#include <sstream>
 
 
 class BufferPool{
@@ -72,6 +73,52 @@ SygnalPomoDriver::SygnalPomoDriver(dwContextHandle_t ctx, dwSALHandle_t sal)
 
 SygnalPomoDriver::~SygnalPomoDriver() {
     release();
+}
+//versioning calls 
+
+dwStatus SygnalPomoDriver::getSensorInformation(dwSensorPlugin_information* information) {
+    if (!information) {
+        std::cerr << "[PLUGIN ERROR] Null information pointer provided" << std::endl;
+        return DW_INVALID_ARGUMENT;
+    }
+
+    std::cout << "[PLUGIN DEBUG] Getting sensor information" << std::endl;
+
+    // Clear the structure
+    std::memset(information, 0, sizeof(dwSensorPlugin_information));
+
+    // Set version information using constants from Common.hpp
+    information->firmware.versionMajor = PLUGIN_VERSION_MAJOR;
+    information->firmware.versionMinor = PLUGIN_VERSION_MINOR;
+    information->firmware.versionPatch = PLUGIN_VERSION_PATCH;
+    
+    // Handle version string - store in member variable for memory management
+    m_versionString = getVersionString();
+    information->firmware.versionString = const_cast<char*>(m_versionString.c_str());
+
+    std::cout << "[PLUGIN INFO] Sensor Information:" << std::endl;
+    std::cout << "  Version: " << information->firmware.versionMajor 
+              << "." << information->firmware.versionMinor 
+              << "." << information->firmware.versionPatch << std::endl;
+    std::cout << "  Version String: " << information->firmware.versionString << std::endl;
+
+    return DW_SUCCESS;
+}
+
+std::string SygnalPomoDriver::getVersionString() const {
+    std::ostringstream ss;
+    ss << PLUGIN_VERSION_MAJOR << "." 
+       << PLUGIN_VERSION_MINOR << "." 
+       << PLUGIN_VERSION_PATCH << "-SygnalPomoDriver";
+    
+    // Add build info if needed
+    #ifdef DEBUG
+    ss << "-DEBUG";
+    #else
+    ss << "-RELEASE";
+    #endif
+    
+    return ss.str();
 }
 
 void SygnalPomoDriver::setSAL(dwSALHandle_t sal) {

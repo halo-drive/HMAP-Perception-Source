@@ -29,7 +29,8 @@ namespace sygnalpomo {
         virtual dwStatus start(dwSensorHandle_t sensor) = 0;
         virtual dwStatus stop(dwSensorHandle_t sensor) = 0;
         virtual dwStatus release(dwSensorHandle_t sensor) = 0;
-
+        dwStatus getSensorInformation(dwSensorPlugin_information* information);
+        std::string getVersionString() const;
         //--------------------------------------------------------------------------
         // CAN-Specific Operations
         //--------------------------------------------------------------------------

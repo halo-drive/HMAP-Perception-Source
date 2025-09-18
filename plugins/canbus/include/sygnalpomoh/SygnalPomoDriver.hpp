@@ -4,6 +4,7 @@
 #include <dw/sensors/canbus/CAN.h>
 #include <dw/sensors/canbus/Interpreter.h>
 #include <dw/sensors/common/Sensors.h>
+#include <dw/sensors/legacy/plugins/SensorCommonPlugin.h>
 #include "Common.hpp"
 #include <iostream>
 #include <string>
@@ -119,7 +120,9 @@ public:
     dwStatus start();
     dwStatus stop();
     dwStatus release();
-    
+    //versioning 
+    dwStatus getSensorInformation(dwSensorPlugin_information* information);
+    std::string getVersionString() const;
     //--------------------------------------------------------------------------
     // CAN Message Operations
     //--------------------------------------------------------------------------
@@ -192,6 +195,7 @@ private:
     bool getSignalInfo(const char** name, dwTrivialDataType* type, dwCANVehicleData* data, uint32_t idx) const;
     bool getSignalValuef32(float32_t* value, dwTime_t* timestamp, uint32_t idx) const;
     bool getSignalValuei32(int32_t* value, dwTime_t* timestamp, uint32_t idx) const;
+    mutable std::string m_versionString;
 
     // Message Handlers
     void handleHeartbeatMessage(const dwCANMessage* msg, const uint8_t* processedData);
