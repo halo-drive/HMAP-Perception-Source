@@ -42,10 +42,9 @@ Halo is a cutting-edge startup focused on developing advanced autonomous driving
 
 ### Software Dependencies
 - **Operating System:** NVIDIA Drive OS 6.0+
-- **DriveWorks SDK:** Version 5.8+
-- **CUDA:** Version 12.0+
-- **TensorRT:** Version 8.6+
-- **OpenCV:** Version 4.5+
+- **DriveWorks SDK:** Version 5.20+
+- **CUDA:** Version 11.4
+- **TensorRT:** Version 8.6.13
 
 ## Repository Structure
 
@@ -90,7 +89,7 @@ HMAP's perception system is built on a modular architecture optimized for real-t
 ## Contributing
 
 ### Development Guidelines
-- Follow Halo's coding standards (see [CODING_STANDARDS.md](CODING_STANDARDS.md))
+- Follow Halo's coding standards (see [CODING_STANDARDS.md](CODING_STANDARDS.md) (to be provided))
 - All commits must pass CI/CD pipeline
 - Safety-critical code requires additional review
 - Performance regressions are not acceptable
@@ -112,15 +111,8 @@ This repository contains proprietary and confidential information. Access is res
 
 ## Support & Contact
 
-### Technical Support
-- **Internal Teams:** Contact #hmap-support on Slack
-- **Partners:** Submit tickets via Halo Partner Portal
-- **Documentation:** Available in [docs/](docs/) directory
-
 ### Maintainers
-- **Lead Engineer:** [@lead-engineer](https://github.com/lead-engineer)
-- **Perception Team:** [@halo-perception](https://github.com/orgs/halo-drive/teams/perception)
-- **DevOps:** [@halo-devops](https://github.com/orgs/halo-drive/teams/devops)
+- **Engineer:** [@sudoashwin](ashwin@drivehalo.com)
 
 ## License
 
@@ -138,8 +130,6 @@ This software is proprietary and confidential to Halo. Unauthorized reproduction
 | v2.0.0  | 2024-08-01  | Major architecture refactor, DriveWorks 5.8 support |
 | v1.5.0  | 2024-06-15  | Multi-camera support, improved latency |
 | v1.0.0  | 2024-04-01  | Initial production release |
-
-For detailed changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
