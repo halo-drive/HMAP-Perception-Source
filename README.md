@@ -127,7 +127,7 @@ This software is proprietary and confidential to Halo. Unauthorized reproduction
 | Version | Release Date | Key Features |
 |---------|-------------|--------------|
 | v2.1.0  | 2024-09-15  | Enhanced LiDAR integration, performance optimizations |
-| v2.0.0  | 2025-07-01  | Major architecture refactor, DriveWorks 5.8 support |
+| v2.0.0  | 2025-07-01  | Major architecture refactor, DriveWorks 6.0.10 support |
 | v1.5.0  | 2025-03-15  | Multi-camera support, improved latency |
 | v1.0.0  | 2024-08-01  | Initial production release |
 
