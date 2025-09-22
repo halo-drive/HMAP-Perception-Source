@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <mutex>
 
 #include <dw/control/vehicleio/VehicleIO.h>
 #include <dw/core/base/Types.h>
@@ -105,6 +106,38 @@ private:
     } m_renderingMode = ON_VEHICLE_STICK_TO_WORLD;
 
     // ------------------------------------------------
+    //Temporal Synchronization Infrastructure  
+    // ------------------------------------------------
+    struct TemporalSensorBuffer {
+        std::map<dwTime_t, dwGPSFrame> gpsBuffer;
+        std::map<dwTime_t, dwIMUFrame> imuBuffer;
+        std::map<dwTime_t, dwCANMessage> canBuffer;
+        std::mutex bufferMutex;
+        
+        //temporal tracking
+        dwTime_t lastProcessedTimestamp = 0;
+        dwTime_t lastGPSTimestamp       = 0;
+        dwTime_t lastIMUTimestamp       = 0;
+        dwTime_t lastCANTimestamp       = 0;
+
+        //Buffer management
+        static constexpr dwTime_t BUFFER_RENTENTION_US = 1000000; //1 second
+
+        void cleanupOldData(dwTime_t currentTimestamp) {
+           dwTime_t cutoff = currentTimestamp - BUFFER_RENTENTION_US;
+           
+           gpsBuffer.erase(gpsBuffer.begin(), gpsBuffer.lower_bound(cutoff));
+           imuBuffer.erase(imuBuffer.begin(), imuBuffer.lower_bound(cutoff));
+           canBuffer.erase(canBuffer.begin(), canBuffer.lower_bound(cutoff));
+        }
+    } m_temporalBuffers;
+
+    static constexpr dwTime_t TEMPORAL_WINDOW_US = 100000 ;
+    static constexpr dwTime_t FUSION_RATE_US  = 50000 ;
+    static constexpr dwTime_t SENSOR_TIMEOUT_US  = 50000 ; 
+    dwTime_t m_lastFusionTimestamp = 0;
+
+    // ------------------------------------------------
     // Camera and video visualization
     // ------------------------------------------------
     dwImageHandle_t m_convertedImageRGBA = DW_NULL_HANDLE;
@@ -157,6 +190,347 @@ private:
     dwTime_t m_firstTimestamp      = 0;
 
     TrajectoryLogger m_trajectoryLog;
+
+private:
+    // ------------------------------------------------
+    // Temporal Fusion Engine
+    // ------------------------------------------------
+    
+    /**
+     * Attempts temporal fusion of all sensor data at current timestamp
+     * @param currentTime Current system timestamp in microseconds
+     * @return true if fusion was successful, false if waiting for more data
+     */
+    bool attemptTemporalFusion(dwTime_t currentTime) {
+        std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
+        
+        // Find GPS anchor point (slowest sensor drives fusion timing)
+        auto gpsAnchor = findLatestValidGPS(currentTime);
+        if (gpsAnchor == m_temporalBuffers.gpsBuffer.end()) {
+            return false; // No GPS data available yet
+        }
+        
+        dwTime_t anchorTimestamp = gpsAnchor->first;
+        
+        // Skip if we've already processed this timestamp
+        if (anchorTimestamp <= m_temporalBuffers.lastProcessedTimestamp) {
+            return false;
+        }
+        
+        // Find temporally aligned IMU data
+        auto imuMatch = findClosestSensorData(m_temporalBuffers.imuBuffer, anchorTimestamp, TEMPORAL_WINDOW_US);
+        if (imuMatch == m_temporalBuffers.imuBuffer.end()) {
+            return false; // No IMU data within temporal window
+        }
+        
+        // Extract synchronized sensor frames
+        dwGPSFrame& gpsFrame = gpsAnchor->second;
+        dwIMUFrame& imuFrame = imuMatch->second;
+        
+        // Update current sensor states for rendering/logging
+        m_currentGPSFrame = gpsFrame;
+        m_currentIMUFrame = imuFrame;
+        
+        // Feed synchronized data to egomotion (mimics original sample's immediate processing)
+        processSynchronizedSensorData(gpsFrame, imuFrame, anchorTimestamp);
+        
+        // Handle CAN data synchronization
+        dwVehicleIOSafetyState safetyState;
+        dwVehicleIONonSafetyState nonSafetyState;
+        if (m_canParser->getTemporallySynchronizedState(&safetyState, &nonSafetyState)) {
+            if (nonSafetyState.speedESC >= 0.0f && nonSafetyState.speedESC < 100.0f) {
+                CHECK_DW_ERROR(dwEgomotion_addVehicleIOState(&safetyState, &nonSafetyState, nullptr, m_egomotion));
+                
+                // Rate-limited logging
+                static dwTime_t lastCommitLog = 0;
+                if (allowEvery(anchorTimestamp, lastCommitLog, 200000)) {
+                    char buf[256];
+                    sprintf(buf, "✓ Temporal fusion complete: GPS=%.6f°,%.6f°, Speed=%.2f m/s, Steering=%.1f°\n",
+                            gpsFrame.latitude, gpsFrame.longitude,
+                            nonSafetyState.speedESC, safetyState.steeringWheelAngle * 180.0f / M_PI);
+                    printColored(stdout, COLOR_GREEN, buf);
+                }
+            }
+        }
+        
+        m_temporalBuffers.lastProcessedTimestamp = anchorTimestamp;
+        m_elapsedTime = anchorTimestamp - m_firstTimestamp;
+        
+        return true;
+    }
+    
+    /**
+     * Processes synchronized GPS and IMU data (equivalent to original immediate processing)
+     */
+    void processSynchronizedSensorData(const dwGPSFrame& gpsFrame, const dwIMUFrame& imuFrame, dwTime_t timestamp) {
+        // GPS processing (from original immediate processing)
+        m_trajectoryLog.addWGS84("GPS", gpsFrame);
+        CHECK_DW_ERROR(dwGlobalEgomotion_addGPSMeasurement(&gpsFrame, m_globalEgomotion));
+        
+        // IMU processing (from original immediate processing)  
+        if (m_egomotionParameters.motionModel != DW_EGOMOTION_ODOMETRY) {
+            dwEgomotion_addIMUMeasurement(&imuFrame, m_egomotion);
+        }
+        
+        // Rate-limited sensor logging (preserve original 5Hz logging rate)
+        static dwTime_t lastGpsLog = 0, lastImuLog = 0;
+        
+        if (allowEvery(timestamp, lastGpsLog, 200000)) {
+            char buffer[512];
+            sprintf(buffer, "GPS Data: Lat=%.6f°, Lon=%.6f°, Alt=%.2fm, Speed=%.2fm/s, Timestamp=%lu\n",
+                    gpsFrame.latitude, gpsFrame.longitude, gpsFrame.altitude,
+                    gpsFrame.speed, gpsFrame.timestamp_us);
+            printColored(stdout, COLOR_GREEN, buffer);
+        }
+        
+        if (allowEvery(timestamp, lastImuLog, 200000)) {
+            char buffer[512];
+            sprintf(buffer, "IMU Data: Accel=[%.3f, %.3f, %.3f] m/s², Gyro=[%.3f, %.3f, %.3f] rad/s, Timestamp=%lu\n",
+                    imuFrame.acceleration[0], imuFrame.acceleration[1], imuFrame.acceleration[2],
+                    imuFrame.turnrate[0], imuFrame.turnrate[1], imuFrame.turnrate[2],
+                    imuFrame.timestamp_us);
+            printColored(stdout, COLOR_DEFAULT, buffer);
+        }
+    }
+    
+    /**
+     * Finds the most recent valid GPS measurement for temporal anchoring
+     */
+    std::map<dwTime_t, dwGPSFrame>::iterator findLatestValidGPS(dwTime_t currentTime) {
+        if (m_temporalBuffers.gpsBuffer.empty()) {
+            return m_temporalBuffers.gpsBuffer.end();
+        }
+        
+        // Find GPS data within reasonable recency (allow up to 200ms latency)
+        dwTime_t earliestAcceptable = currentTime - 200000;
+        auto it = m_temporalBuffers.gpsBuffer.lower_bound(earliestAcceptable);
+        
+        if (it != m_temporalBuffers.gpsBuffer.end()) {
+            // Return the most recent GPS measurement
+            return std::prev(m_temporalBuffers.gpsBuffer.end());
+        }
+        
+        return m_temporalBuffers.gpsBuffer.end();
+    }
+    
+    /**
+     * Generic template to find closest sensor data within temporal window
+     */
+    template<typename SensorMap>
+    typename SensorMap::iterator findClosestSensorData(SensorMap& sensorMap, dwTime_t targetTime, dwTime_t maxWindow) {
+        if (sensorMap.empty()) {
+            return sensorMap.end();
+        }
+        
+        auto targetIt = sensorMap.lower_bound(targetTime);
+        typename SensorMap::iterator bestMatch = sensorMap.end();
+        dwTime_t bestDistance = maxWindow + 1;
+        
+        // Check forward direction
+        if (targetIt != sensorMap.end()) {
+            dwTime_t forwardDist = std::abs(static_cast<int64_t>(targetIt->first - targetTime));
+            if (forwardDist <= maxWindow && forwardDist < bestDistance) {
+                bestMatch = targetIt;
+                bestDistance = forwardDist;
+            }
+        }
+        
+        // Check backward direction
+        if (targetIt != sensorMap.begin()) {
+            auto backIt = std::prev(targetIt);
+            dwTime_t backwardDist = std::abs(static_cast<int64_t>(backIt->first - targetTime));
+            if (backwardDist <= maxWindow && backwardDist < bestDistance) {
+                bestMatch = backIt;
+                bestDistance = backwardDist;
+            }
+        }
+        
+        return bestMatch;
+    }
+    
+    
+    void drainSensorEventsToBuffers() {
+            // Short drainage budget to prevent starvation (500μs vs original 2ms)
+            auto budgetEnd = std::chrono::steady_clock::now() + std::chrono::microseconds(500);
+            int drained = 0;
+            
+            // Batch updates to reduce mutex contention
+            std::vector<std::pair<dwTime_t, dwGPSFrame>> gpsUpdates;
+            std::vector<std::pair<dwTime_t, dwIMUFrame>> imuUpdates;
+            std::vector<std::pair<dwTime_t, dwCANMessage>> canUpdates;
+            
+            while (!isPaused() && drained < 32) {
+                if (std::chrono::steady_clock::now() >= budgetEnd) {
+                    break;
+                }
+                
+                dwStatus status = dwSensorManager_acquireNextEvent(&acquiredEvent, 0, m_sensorManager);
+                
+                if (status == DW_TIME_OUT) {
+                    break;
+                }
+                
+                if (status != DW_SUCCESS) {
+                    if (status != DW_END_OF_STREAM) {
+                        logError("Sensor drainage error: %s\n", dwGetStatusName(status));
+                    } else if (should_AutoExit()) {
+                        stop();
+                        return;
+                    }
+                    break;
+                }
+                
+                dwTime_t timestamp = acquiredEvent->timestamp_us;
+                
+                if (m_firstTimestamp == 0) {
+                    m_firstTimestamp = timestamp;
+                    m_lastSampleTimestamp = timestamp;
+                }
+                
+                // Store in batch arrays with sensor validation
+                switch (acquiredEvent->type) {
+                    case DW_SENSOR_GPS:
+                        if (acquiredEvent->sensorIndex == m_gpsSensorIdx) {
+                            gpsUpdates.emplace_back(timestamp, acquiredEvent->gpsFrame);
+                        }
+                        break;
+                    case DW_SENSOR_IMU:
+                        if (acquiredEvent->sensorIndex == m_imuSensorIdx) {
+                            imuUpdates.emplace_back(timestamp, acquiredEvent->imuFrame);
+                        }
+                        break;
+                    case DW_SENSOR_CAN:
+                        if (acquiredEvent->sensorIndex == m_vehicleSensorIdx) {
+                            canUpdates.emplace_back(timestamp, acquiredEvent->canFrame);
+                            // Process CAN immediately for parser
+                            m_canParser->processCANFrame(acquiredEvent->canFrame);
+                            
+                            static dwTime_t lastTimeoutCheck = 0;
+                            if (timestamp - lastTimeoutCheck > 50000) {
+                                m_canParser->checkMessageTimeouts(timestamp);
+                                lastTimeoutCheck = timestamp;
+                            }
+                        }
+                        break;
+                    case DW_SENSOR_CAMERA:
+                        // Camera processing remains immediate
+                        processCameraImmediate();
+                        break;
+                    default:
+                        break;
+                }
+                
+                dwSensorManager_releaseAcquiredEvent(acquiredEvent, m_sensorManager);
+                acquiredEvent = nullptr;
+                ++drained;
+            }
+            
+            // Single batch update with mutex lock
+            if (!gpsUpdates.empty() || !imuUpdates.empty() || !canUpdates.empty()) {
+                std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
+                
+                for (auto& update : gpsUpdates) {
+                    if (update.first > m_temporalBuffers.lastGPSTimestamp) {
+                        m_temporalBuffers.gpsBuffer[update.first] = update.second;
+                        m_temporalBuffers.lastGPSTimestamp = update.first;
+                    }
+                }
+                
+                for (auto& update : imuUpdates) {
+                    if (update.first > m_temporalBuffers.lastIMUTimestamp) {
+                        m_temporalBuffers.imuBuffer[update.first] = update.second;
+                        m_temporalBuffers.lastIMUTimestamp = update.first;
+                    }
+                }
+                
+                for (auto& update : canUpdates) {
+                    m_temporalBuffers.canBuffer[update.first] = update.second;
+                    m_temporalBuffers.lastCANTimestamp = update.first;
+                }
+                
+                // Cleanup old data once per batch
+                if (!gpsUpdates.empty()) {
+                    m_temporalBuffers.cleanupOldData(gpsUpdates.back().first);
+                } else if (!imuUpdates.empty()) {
+                    m_temporalBuffers.cleanupOldData(imuUpdates.back().first);
+                } else if (!canUpdates.empty()) {
+                    m_temporalBuffers.cleanupOldData(canUpdates.back().first);
+                }
+            }
+    }
+
+    void bufferGPSData(const dwGPSFrame& gpsFrame) {
+        dwTime_t timestamp = gpsFrame.timestamp_us;
+        
+        // NVIDIA requirement: ignore non-monotonic timestamps  
+        if (timestamp <= m_temporalBuffers.lastGPSTimestamp) {
+            logWarn("GPS: ignoring non-monotonic timestamp %lu (last: %lu)\n", 
+                    timestamp, m_temporalBuffers.lastGPSTimestamp);
+            return;
+        }
+        
+        std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
+        m_temporalBuffers.gpsBuffer[timestamp] = gpsFrame;
+        m_temporalBuffers.lastGPSTimestamp = timestamp;
+        m_temporalBuffers.cleanupOldData(timestamp);
+    }
+    
+    /**
+     * Buffer IMU data with timestamp validation
+     */
+    void bufferIMUData(const dwIMUFrame& imuFrame) {
+        dwTime_t timestamp = imuFrame.timestamp_us;
+        
+        // NVIDIA requirement: ignore non-monotonic timestamps
+        if (timestamp <= m_temporalBuffers.lastIMUTimestamp) {
+            return; // Silently ignore (IMU data is high-frequency)
+        }
+        
+        std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
+        m_temporalBuffers.imuBuffer[timestamp] = imuFrame;
+        m_temporalBuffers.lastIMUTimestamp = timestamp;
+        m_temporalBuffers.cleanupOldData(timestamp);
+    }
+    
+    /**
+     * Buffer CAN data and feed to parser
+     */
+    void bufferCANData(const dwCANMessage& canFrame) {
+        if (acquiredEvent->sensorIndex != m_vehicleSensorIdx) {
+            return; // Wrong sensor
+        }
+        
+        // Feed to parser immediately (CAN parsing is fast)
+        m_canParser->processCANFrame(canFrame);
+        
+        // Periodic timeout check
+        static dwTime_t lastTimeoutCheck = 0;
+        dwTime_t timestamp = canFrame.timestamp_us;
+        if (timestamp - lastTimeoutCheck > 50000) {
+            m_canParser->checkMessageTimeouts(timestamp);
+            lastTimeoutCheck = timestamp;
+        }
+        
+        // Optional: store in buffer for advanced temporal correlation
+        std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
+        m_temporalBuffers.canBuffer[timestamp] = canFrame;
+        m_temporalBuffers.lastCANTimestamp = timestamp;
+        m_temporalBuffers.cleanupOldData(timestamp);
+    }
+    
+    /**
+     * Immediate camera processing (unchanged)
+     */
+    void processCameraImmediate() {
+        if (m_lastGLFrame == DW_NULL_HANDLE) {
+            dwImageHandle_t nextFrame = DW_NULL_HANDLE;
+            dwSensorCamera_getImage(&nextFrame, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, acquiredEvent->camFrames[0]);
+            
+            m_lastGLFrame = m_streamerInput2GL->post(nextFrame);
+            dwImage_destroy(nextFrame);
+            m_shallRender = true;
+        }
+    }
 
 public:
     EgomotionSample(const ProgramArguments& args)
@@ -1034,164 +1408,36 @@ public:
     }
 
     /// Real-time CAN message processing with synchronized state commits
+    /// Temporal sensor fusion with synchronized egomotion processing
     void onProcess() override
-{
-    // Drain events for a short budget each tick so we never starve subscribers
-    auto budgetEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
-    int processed = 0;
-    while (!isPaused())
     {
-        if (processed >= 64 || std::chrono::steady_clock::now() >= budgetEnd)
-            break;
-
-        dwStatus status = dwSensorManager_acquireNextEvent(&acquiredEvent, 0, m_sensorManager);
-
-        if (status == DW_TIME_OUT)
-            break;
-
-        if (status != DW_SUCCESS)
-        {
-            if (status != DW_END_OF_STREAM)
-                logError("Real-time sensor error: %s\n", dwGetStatusName(status));
-            else if (should_AutoExit())
-            {
-                log("End of stream reached, stopping real-time processing\n");
-                stop();
-                return;
+        dwTime_t currentTime = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        // Phase 1: Quick drainage of sensor events to temporal buffers  
+        // (Mimics original sample's event loop but stores for temporal processing)
+        drainSensorEventsToBuffers();
+        
+        // Phase 2: Attempt temporal fusion at GPS rate (prevents buffer overflow)
+        // (Mimics original sample's synchronized processing but with temporal coordination)
+        if (currentTime - m_lastFusionTimestamp >= FUSION_RATE_US) {
+            if (attemptTemporalFusion(currentTime)) {
+                m_lastFusionTimestamp = currentTime;
+                
+                // Phase 3: Continue with original sample's pose estimation logic
+                performPoseEstimationAndTrajectory();
             }
-            pause();
-            if (isOffscreen())
-                stop();
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            break;
         }
+    }
 
-        dwTime_t timestamp = acquiredEvent->timestamp_us;
-
-        if (m_firstTimestamp == 0)
-        {
-            m_firstTimestamp = timestamp;
-            m_lastSampleTimestamp = timestamp;
-        }
-
-        // Process sensor events for real-time data
-        switch (acquiredEvent->type)
-        {
-        case DW_SENSOR_CAN:
-        {
-            if (acquiredEvent->sensorIndex != m_vehicleSensorIdx)
-                break;
-            
-            m_canParser->processCANFrame(acquiredEvent->canFrame); // Feed raw frame to parser
-
-            // Periodic timeout check
-            static dwTime_t lastTimeoutCheck = 0;
-            if (timestamp - lastTimeoutCheck > 50000) {
-                m_canParser->checkMessageTimeouts(timestamp);
-                lastTimeoutCheck = timestamp;
-            }
-
-            // Check for synchronized state (like VehicleIO.getState())
-            dwVehicleIOSafetyState safetyState;
-            dwVehicleIONonSafetyState nonSafetyState;
-
-            if (m_canParser->getTemporallySynchronizedState(&safetyState, &nonSafetyState)) {
-                // Validate before feeding to egomotion
-                if (nonSafetyState.speedESC >= 0.0f && nonSafetyState.speedESC < 100.0f) {
-                    CHECK_DW_ERROR(dwEgomotion_addVehicleIOState(&safetyState, &nonSafetyState, nullptr, m_egomotion));
-                    
-                    static dwTime_t lastCommitLog = 0;
-                    if (allowEvery(timestamp, lastCommitLog, 200000)) {
-                        char buf[256];
-                        sprintf(buf, "✓ Synchronized state fed to egomotion: Speed=%.2f m/s, Steering=%.1f°\n",
-                                nonSafetyState.speedESC, safetyState.steeringWheelAngle * 180.0f / M_PI);
-                        printColored(stdout, COLOR_GREEN, buf);
-                    }
-                }
-            }
-
-            m_elapsedTime = timestamp - m_firstTimestamp;
-            break;
-        }
-
-        case DW_SENSOR_IMU:
-        {
-            if (acquiredEvent->sensorIndex != m_imuSensorIdx)
-                break;
-
-            m_currentIMUFrame = acquiredEvent->imuFrame;
-
-            // ---- RATE-LIMITED IMU LOG (5 Hz) ----
-            static dwTime_t lastImuLog = 0;
-            if (allowEvery(timestamp, lastImuLog, 200000)) {
-                char buffer[512];
-                sprintf(buffer, "IMU Data: Accel=[%.3f, %.3f, %.3f] m/s², Gyro=[%.3f, %.3f, %.3f] rad/s, Timestamp=%lu\n",
-                        m_currentIMUFrame.acceleration[0], m_currentIMUFrame.acceleration[1], m_currentIMUFrame.acceleration[2],
-                        m_currentIMUFrame.turnrate[0], m_currentIMUFrame.turnrate[1], m_currentIMUFrame.turnrate[2],
-                        m_currentIMUFrame.timestamp_us);
-                printColored(stdout, COLOR_DEFAULT, buffer);
-            }
-
-            if (m_egomotionParameters.motionModel != DW_EGOMOTION_ODOMETRY)
-            {
-                dwEgomotion_addIMUMeasurement(&m_currentIMUFrame, m_egomotion);
-            }
-            m_elapsedTime = timestamp - m_firstTimestamp;
-            break;
-        }
-
-        case DW_SENSOR_GPS:
-        {
-            if (acquiredEvent->sensorIndex != m_gpsSensorIdx)
-                break;
-
-            m_currentGPSFrame = acquiredEvent->gpsFrame;
-
-            // ---- RATE-LIMITED GPS LOG (5 Hz) ----
-            static dwTime_t lastGpsLog = 0;
-            if (allowEvery(timestamp, lastGpsLog, 200000)) {
-                char buffer[512];
-                sprintf(buffer, "GPS Data: Lat=%.6f°, Lon=%.6f°, Alt=%.2fm, Speed=%.2fm/s, Course=%.1f°, Timestamp=%lu\n",
-                        m_currentGPSFrame.latitude, m_currentGPSFrame.longitude, m_currentGPSFrame.altitude,
-                        m_currentGPSFrame.speed, m_currentGPSFrame.course, m_currentGPSFrame.timestamp_us);
-                printColored(stdout, COLOR_GREEN, buffer);
-            }
-
-            m_trajectoryLog.addWGS84("GPS", m_currentGPSFrame);
-            CHECK_DW_ERROR(dwGlobalEgomotion_addGPSMeasurement(&m_currentGPSFrame, m_globalEgomotion));
-            m_elapsedTime = timestamp - m_firstTimestamp;
-            break;
-        }
-
-        case DW_SENSOR_CAMERA:
-        {
-            // Keep at most one GL frame in flight; drop if renderer hasn’t caught up
-            if (m_lastGLFrame == DW_NULL_HANDLE)
-            {
-                dwImageHandle_t nextFrame = DW_NULL_HANDLE;
-                dwSensorCamera_getImage(&nextFrame, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, acquiredEvent->camFrames[0]);
-
-                m_lastGLFrame = m_streamerInput2GL->post(nextFrame);
-
-                // Destroy wrapper handle (not the underlying buffer)
-                dwImage_destroy(nextFrame);
-
-                m_shallRender = true;
-            }
-            break;
-        }
-
-        default: break;
-        }
-
-        // Return event to SensorManager
-        dwSensorManager_releaseAcquiredEvent(acquiredEvent, m_sensorManager);
-        acquiredEvent = nullptr;
-
-        // Pose estimation & trajectory
+private:
+    /**
+     * Pose estimation and trajectory building (extracted from original onProcess)
+     */
+    void performPoseEstimationAndTrajectory() {
         dwEgomotionResult estimate;
         dwEgomotionUncertainty uncertainty;
+        
         if (dwEgomotion_getEstimation(&estimate, m_egomotion) == DW_SUCCESS &&
             dwEgomotion_getUncertainty(&uncertainty, m_egomotion) == DW_SUCCESS)
         {
@@ -1258,11 +1504,7 @@ public:
                 m_lastSampleTimestamp = estimate.timestamp;
             }
         }
-
-        ++processed;
     }
-}
-
 
     void onKeyDown(int key, int scancode, int mods) override
     {
