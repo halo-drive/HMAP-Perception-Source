@@ -531,15 +531,27 @@ public:
     log("Added black image camera %d (no real camera available)\n", i);
     }
     
-    // Log camera mapping for BEVFusion order
-    log("=== Camera Mapping for BEVFusion ===\n");
-    log("BEVFusion Index 0 (FRONT): %s\n", m_cameras[0].isBlackImage ? "BLACK IMAGE" : m_cameras[0].name.c_str());
-    log("BEVFusion Index 1 (FRONT_RIGHT): %s\n", m_cameras[1].isBlackImage ? "BLACK IMAGE" : m_cameras[1].name.c_str());
-    log("BEVFusion Index 2 (FRONT_LEFT): %s\n", m_cameras[2].isBlackImage ? "BLACK IMAGE" : m_cameras[2].name.c_str());
-    log("BEVFusion Index 3 (BACK): %s\n", m_cameras[3].isBlackImage ? "BLACK IMAGE" : m_cameras[3].name.c_str());
-    log("BEVFusion Index 4 (BACK_LEFT): %s\n", m_cameras[4].isBlackImage ? "BLACK IMAGE" : m_cameras[4].name.c_str());
-    log("BEVFusion Index 5 (BACK_RIGHT): %s\n", m_cameras[5].isBlackImage ? "BLACK IMAGE" : m_cameras[5].name.c_str());
-    log("=====================================\n");
+    // Log rig camera indices and names for verification
+    log("=== Rig camera indices and names ===\n");
+    for (size_t i = 0; i < m_cameras.size(); ++i) {
+        log("rig[%zu] name=%s (black=%s)\n", i, m_cameras[i].name.c_str(), m_cameras[i].isBlackImage ? "true" : "false");
+    }
+    log("====================================\n");
+    
+    // Log intended BEVFusion mapping (BEV indices -> rig indices)
+    log("=== Intended Camera Mapping for BEVFusion (index -> rig[name]) ===\n");
+    auto name_or_black = [&](int rigIdx)->const char*{
+        if (rigIdx < 0 || rigIdx >= (int)m_cameras.size()) return "BLACK IMAGE";
+        return m_cameras[rigIdx].isBlackImage ? "BLACK IMAGE" : m_cameras[rigIdx].name.c_str();
+    };
+    // Target mapping: 0=-1, 1=1, 2=0, 3=-1, 4=2, 5=3
+    log("0 FRONT       -> %s\n", name_or_black(-1));
+    log("1 FRONT_RIGHT -> %s\n", name_or_black(1));
+    log("2 FRONT_LEFT  -> %s\n", name_or_black(0));
+    log("3 BACK        -> %s\n", name_or_black(-1));
+    log("4 BACK_LEFT   -> %s\n", name_or_black(2));
+    log("5 BACK_RIGHT  -> %s\n", name_or_black(3));
+    log("==============================================================\n");
     
     // Initialize LiDAR using rig file approach
     uint32_t lidarCount = 0;
@@ -830,9 +842,23 @@ public:
     memcpy(m_camera2lidar.ptr<float>(), camera2lidar_data.data(), camera2lidar_data.size() * sizeof(float));
     memcpy(m_cameraIntrinsics.ptr<float>(), camera_intrinsics_data.data(), camera_intrinsics_data.size() * sizeof(float));
     memcpy(m_lidar2image.ptr<float>(), lidar2image_data.data(), lidar2image_data.size() * sizeof(float));
-    memcpy(m_imgAugMatrix.ptr<float>(), img_aug_matrix_data.data(), img_aug_matrix_data.size() * sizeof(float));
+    // Follow CUDA-BEVFusion: img_aug_matrix performs model-space resize 1600x900 -> 704x256
+    // Scale: sx = 704/1600, sy = 256/900. Do not apply in GUI projections.
+    {
+        std::vector<float> aug_data(img_aug_matrix_data.size(), 0.0f);
+        const float sx = 704.0f / 1600.0f;
+        const float sy = 256.0f / 900.0f;
+        for (int i = 0; i < MAX_CAMERAS; ++i) {
+            const int base = i * 16;
+            aug_data[base + 0]  = sx;   // (0,0)
+            aug_data[base + 5]  = sy;   // (1,1)
+            aug_data[base + 10] = 1.0f; // (2,2)
+            aug_data[base + 15] = 1.0f; // (3,3)
+        }
+        memcpy(m_imgAugMatrix.ptr<float>(), aug_data.data(), aug_data.size() * sizeof(float));
+    }
     
-    log("Identity transformation matrices initialized as fallback\n");
+    log("Transformation matrices initialized (img_aug set to 704x256 scale for model)\n");
     }
     
     // Note: saveDetectionResults function removed as requested - visualization is handled in GUI
@@ -1169,10 +1195,13 @@ public:
     }
     };
     
-          // Render boxes by class with different colors
-      renderBoxGroup(vehicleBoxes, {1.0f, 0.0f, 0.0f, 1.0f}, "vehicle"); // Red for vehicles
-      renderBoxGroup(pedestrianBoxes, {0.0f, 1.0f, 0.0f, 1.0f}, "pedestrian"); // Green for pedestrians
-      renderBoxGroup(cyclistBoxes, {0.0f, 0.0f, 1.0f, 1.0f}, "cyclist"); // Blue for cyclists
+      // Render boxes by class with nuScenes colors (CUDA-BEVFusion defaults)
+      // car (vehicleBoxes grouped include id=0): RGB(255,158,0)
+      renderBoxGroup(vehicleBoxes, {255.0f/255.0f, 158.0f/255.0f, 0.0f/255.0f, 1.0f}, "vehicle");
+      // pedestrian: RGB(0,0,230)
+      renderBoxGroup(pedestrianBoxes, {0.0f/255.0f, 0.0f/255.0f, 230.0f/255.0f, 1.0f}, "pedestrian");
+      // cyclist (bicycle proxy): RGB(220,20,60)
+      renderBoxGroup(cyclistBoxes, {220.0f/255.0f, 20.0f/255.0f, 60.0f/255.0f, 1.0f}, "cyclist");
     } // End of renderBoundingBoxes()
     
     // Always render ego vehicle (independent of detections)
@@ -1674,24 +1703,16 @@ public:
     // BEVFusion index 0 (FRONT) - black image (not in your rig)
     cameraImages[0] = tempBlackImages[0].get();
     
-    // BEVFusion index 1 (FRONT_RIGHT) - rig camera:front_right (index 1)
-    cameraImages[1] = (m_cameras.size() > 1 && !m_cameras[1].isBlackImage) ? 
-                      getCameraFrame(1) : tempBlackImages[1].get();
-    
-    // BEVFusion index 2 (FRONT_LEFT) - rig camera:front_left (index 0)
-    cameraImages[2] = (m_cameras.size() > 0 && !m_cameras[0].isBlackImage) ? 
-                      getCameraFrame(0) : tempBlackImages[2].get();
-    
-    // BEVFusion index 3 (BACK) - black image (not in your rig)
+    // BEVFusion index 1 (FRONT_RIGHT) <- rig 1 (front_right)
+    cameraImages[1] = (m_cameras.size() > 1 && !m_cameras[1].isBlackImage) ? getCameraFrame(1) : tempBlackImages[1].get();
+    // BEVFusion index 2 (FRONT_LEFT)  <- rig 0 (front_left)
+    cameraImages[2] = (m_cameras.size() > 0 && !m_cameras[0].isBlackImage) ? getCameraFrame(0) : tempBlackImages[2].get();
+    // BEVFusion index 3 (BACK) <- black
     cameraImages[3] = tempBlackImages[3].get();
-    
-    // BEVFusion index 4 (BACK_LEFT) - rig camera:back_left (index 2)
-    cameraImages[4] = (m_cameras.size() > 2 && !m_cameras[2].isBlackImage) ? 
-                      getCameraFrame(2) : tempBlackImages[4].get();
-    
-    // BEVFusion index 5 (BACK_RIGHT) - rig camera:back_right (index 3)
-    cameraImages[5] = (m_cameras.size() > 3 && !m_cameras[3].isBlackImage) ? 
-                      getCameraFrame(3) : tempBlackImages[5].get();
+    // BEVFusion index 4 (BACK_LEFT)   <- rig 2 (back_left)
+    cameraImages[4] = (m_cameras.size() > 2 && !m_cameras[2].isBlackImage) ? getCameraFrame(2) : tempBlackImages[4].get();
+    // BEVFusion index 5 (BACK_RIGHT)  <- rig 3 (back_right)
+    cameraImages[5] = (m_cameras.size() > 3 && !m_cameras[3].isBlackImage) ? getCameraFrame(3) : tempBlackImages[5].get();
     
     // Get LiDAR data
     if (m_enableLogging) {
@@ -1808,7 +1829,7 @@ public:
     unsigned char* getCameraFrame(size_t cameraIndex)
     {
     if (cameraIndex >= m_cameras.size()) {
-    return nullptr;
+        return nullptr;
     }
     
     CameraData& camera = m_cameras[cameraIndex];
@@ -2298,15 +2319,41 @@ public:
                 cameraIndex, bboxIndex, corners.size(), bbox.score);
         }
         
-        // Set color based on object class (matching 3D rendering)
-        if (bbox.id == 0) { // Vehicle
-            projection.color = {1.0f, 0.0f, 0.0f, 1.0f}; // Red
-        } else if (bbox.id == 1) { // Pedestrian
-            projection.color = {0.0f, 1.0f, 0.0f, 1.0f}; // Green
-        } else if (bbox.id == 2) { // Cyclist
-            projection.color = {0.0f, 0.0f, 1.0f, 1.0f}; // Blue
-        } else {
-            projection.color = {1.0f, 1.0f, 0.0f, 1.0f}; // Yellow for unknown
+        // Set color based on object class using CUDA-BEVFusion nuScenes palette
+        switch (bbox.id) {
+            case 0: /* car */
+                projection.color = {255.0f/255.0f, 158.0f/255.0f, 0.0f/255.0f, 1.0f};
+                break;
+            case 1: /* pedestrian */
+                projection.color = {0.0f/255.0f, 0.0f/255.0f, 230.0f/255.0f, 1.0f};
+                break;
+            case 2: /* cyclist (bicycle) */
+                projection.color = {220.0f/255.0f, 20.0f/255.0f, 60.0f/255.0f, 1.0f};
+                break;
+            case 3: /* motorcycle */
+                projection.color = {255.0f/255.0f, 61.0f/255.0f, 99.0f/255.0f, 1.0f};
+                break;
+            case 4: /* truck */
+                projection.color = {255.0f/255.0f, 99.0f/255.0f, 71.0f/255.0f, 1.0f};
+                break;
+            case 5: /* bus */
+                projection.color = {255.0f/255.0f, 69.0f/255.0f, 0.0f/255.0f, 1.0f};
+                break;
+            case 6: /* trailer */
+                projection.color = {255.0f/255.0f, 140.0f/255.0f, 0.0f/255.0f, 1.0f};
+                break;
+            case 7: /* construction_vehicle */
+                projection.color = {233.0f/255.0f, 150.0f/255.0f, 70.0f/255.0f, 1.0f};
+                break;
+            case 8: /* barrier */
+                projection.color = {112.0f/255.0f, 128.0f/255.0f, 144.0f/255.0f, 1.0f};
+                break;
+            case 9: /* traffic_cone */
+                projection.color = {47.0f/255.0f, 79.0f/255.0f, 79.0f/255.0f, 1.0f};
+                break;
+            default: /* unknown */
+                projection.color = {1.0f, 1.0f, 0.0f, 1.0f};
+                break;
         }
         
         m_cameraProjections[cameraIndex].push_back(projection);
@@ -2414,7 +2461,7 @@ public:
     // BEVFusion index -> Rig camera index (based on your 4camera_1lidar.json)
     // Your rig: 0=front_left, 1=front_right, 2=back_left, 3=back_right
     // BEVFusion: 0=FRONT, 1=FRONT_RIGHT, 2=FRONT_LEFT, 3=BACK, 4=BACK_LEFT, 5=BACK_RIGHT
-    int rigCameraMapping[MAX_CAMERAS] = {-1, 1, 0, -1, 2, 3}; 
+    int rigCameraMapping[MAX_CAMERAS] = {-1, 0, 3, -1, 2, 1}; 
     // -1 = black image (no camera in rig)
     // BEVFusion FRONT(0) → black image
     // BEVFusion FRONT_RIGHT(1) → rig camera:front_right(1)  
@@ -2422,6 +2469,19 @@ public:
     // BEVFusion BACK(3) → black image
     // BEVFusion BACK_LEFT(4) → rig camera:back_left(2)
     // BEVFusion BACK_RIGHT(5) → rig camera:back_right(3)
+    
+    // Friendly camera names for visualization (BEVFusion order)
+    // IMPORTANT: This order must match BEVFusion example and your tensor files
+    // BEVFusion expects: 0=FRONT, 1=FRONT_RIGHT, 2=FRONT_LEFT, 3=BACK, 4=BACK_LEFT, 5=BACK_RIGHT
+    // For 4-camera setup: map your rig cameras to indices 1,2,4,5 and use black images for 0,3
+    static const char* kFriendlyNames[MAX_CAMERAS] = {
+        "FRONT",         // 0 - BEVFusion index 0 (use black image for 4-camera setup)
+        "FRONT_RIGHT",   // 1 - BEVFusion index 1 (your rig camera 1)
+        "FRONT_LEFT",    // 2 - BEVFusion index 2 (your rig camera 0) 
+        "BACK",          // 3 - BEVFusion index 3 (use black image for 4-camera setup)
+        "BACK_LEFT",     // 4 - BEVFusion index 4 (your rig camera 2)
+        "BACK_RIGHT"     // 5 - BEVFusion index 5 (your rig camera 3)
+    };
     
     for (uint32_t i = 0; i < MAX_CAMERAS; i++) {
     try {
@@ -2443,6 +2503,12 @@ public:
     
     // Stream camera image to GL (use rig camera index for display)
     if (rigCameraIndex >= 0 && rigCameraIndex < static_cast<int>(m_cameras.size())) {
+        if (m_enableLogging && m_frameCount % 60 == 0) {
+            const char* rigName = m_cameras[rigCameraIndex].name.c_str();
+            log("GUI tile %u label=%s -> rig[%d]=%s (actual physical position)\n", i,
+                (i < MAX_CAMERAS ? kFriendlyNames[i] : "unknown"),
+                rigCameraIndex, rigName);
+        }
         // Convert RGB to RGBA for display (GPU operation)
         CHECK_DW_ERROR(dwImage_copyConvertAsync(m_cameraRGBAImages[rigCameraIndex], m_cameraRGBImages[rigCameraIndex], m_cudaStream, m_context));
         
@@ -2472,6 +2538,10 @@ public:
     } else {
         // For missing cameras (indices 0 and 3), show black image
         // Use BEVFusion dimensions since all streamers now use consistent dimensions
+        if (m_enableLogging && m_frameCount % 60 == 0) {
+            log("GUI tile %u label=%s -> BLACK IMAGE\n", i,
+                (i < MAX_CAMERAS ? kFriendlyNames[i] : "unknown"));
+        }
         dwImageProperties blackProps = {};
         blackProps.type = DW_IMAGE_CUDA;
         blackProps.format = DW_IMAGE_FORMAT_RGBA_UINT8;
@@ -2519,18 +2589,6 @@ public:
     dwRenderEngine_setColor({1.0f, 1.0f, 1.0f, 1.0f}, m_renderEngine);
     dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_12, m_renderEngine);
     
-    // Friendly camera names for visualization (BEVFusion order)
-    // IMPORTANT: This order must match BEVFusion example and your tensor files
-    // BEVFusion expects: 0=FRONT, 1=FRONT_RIGHT, 2=FRONT_LEFT, 3=BACK, 4=BACK_LEFT, 5=BACK_RIGHT
-    // For 4-camera setup: map your rig cameras to indices 1,2,4,5 and use black images for 0,3
-    static const char* kFriendlyNames[MAX_CAMERAS] = {
-        "FRONT",         // 0 - BEVFusion index 0 (use black image for 4-camera setup)
-        "FRONT_RIGHT",   // 1 - BEVFusion index 1 (your rig camera 0)
-        "FRONT_LEFT",    // 2 - BEVFusion index 2 (your rig camera 3) 
-        "BACK",          // 3 - BEVFusion index 3 (use black image for 4-camera setup)
-        "BACK_LEFT",     // 4 - BEVFusion index 4 (your rig camera 2)
-        "BACK_RIGHT"     // 5 - BEVFusion index 5 (your rig camera 1)
-    };
     std::string cameraLabel;
     const char* friendly = (i < MAX_CAMERAS) ? kFriendlyNames[i] : "unknown";
     if (i < m_cameras.size()) {
