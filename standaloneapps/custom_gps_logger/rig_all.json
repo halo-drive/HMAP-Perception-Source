@@ -1,0 +1,44 @@
+{
+    "_comment": "rig file containing all sensors",
+    "rig": {
+        "sensors": [
+          {
+              "name": "gps",
+              "nominalSensor2Rig": {
+                  "quaternion": [0.0, 0.0, 0.0, 1.0],
+                  "t": [0.0, 0.0, 0.0]
+              },
+              "parameter": "fifo-size=1024",
+              "properties": null,
+              "protocol": "gps.novatel",
+              "sensor2Rig": {
+                  "quaternion": [0.0, 0.0, 0.0, 1.0],
+                  "t": [0.0, 0.0, 0.0]
+              }
+          }
+        ],
+        "vehicle": {
+            "valid": true,
+            "value": {
+                "COMMENT": "Vehicle configuration with zero transformations for testing",
+                "axlebaseFront": 1.5,
+                "axlebaseRear": 1.5,
+                "bumperFront": 0.8,
+                "bumperRear": 0.8,
+                "centerOfMassToRearAxle": 1.5,
+                "frontCorneringStiffness": 30000.0,
+                "height": 2.0,
+                "inertia": 1500.0,
+                "length": 4.0,
+                "mass": 1500.0,
+                "rearCorneringStiffness": 35000.0,
+                "steeringCoefficient": 15.0,
+                "wheelDiameter": 0.65,
+                "wheelbase": 2.8,
+                "width": 1.8,
+                "widthWithMirrors": 2.1
+            }
+        }
+    },
+    "version": 2
+  }
