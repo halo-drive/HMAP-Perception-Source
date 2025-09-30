@@ -1,0 +1,896 @@
+ProgramArguments: Missing argument 'dwTracePath' requested
+[15-09-2025 04:40:28] Platform: Detected Drive Orin P3710
+[15-09-2025 04:40:28] Adding variable DW_Base:DW_Version
+[15-09-2025 04:40:28] Added variable DW_Base:DW_Version
+[15-09-2025 04:40:28] Platform: number of GPU devices detected 1
+[15-09-2025 04:40:28] Platform: currently selected GPU device 0, Resource Data Dir: trt_08_06_12_04, Arch: ga10b
+[15-09-2025 04:40:28] Platform: currently selected GPU device integrated ID 0
+[15-09-2025 04:40:28] CUDLAEngine:getDLACount: CUDLA version is = 1004000
+[15-09-2025 04:40:28] CUDLAEngine:getDLACount: Number of DLA devices = 2
+[15-09-2025 04:40:28] Context::mountResourceCandidateDataPath resource FAILED to mount from './resources': VirtualFileSystem: Failed to mount './resources/resources.pak'
+[15-09-2025 04:40:28] Context::mountResourceCandidateDataPath resource FAILED to mount from '/usr/local/driveworks-5.20/bin/data': VirtualFileSystem: Failed to mount '/usr/local/driveworks-5.20/bin/data/resources.pak'
+[15-09-2025 04:40:28] Context::findDataRootInPathWalk data/DATA_ROOT found at: /usr/local/driveworks/data
+[15-09-2025 04:40:28] Context::mountResourceCandidateDataPath resource FAILED to mount from '/usr/local/driveworks/data': VirtualFileSystem: Failed to mount '/usr/local/driveworks/data/resources.pak'
+[15-09-2025 04:40:28] Context::findDataRootInPathWalk data/DATA_ROOT found at: /usr/local/driveworks-5.20/data
+[15-09-2025 04:40:28] Context::mountResourceCandidateDataPath resource FAILED to mount from '/usr/local/driveworks-5.20/data': VirtualFileSystem: Failed to mount '/usr/local/driveworks-5.20/data/resources.pak'
+[15-09-2025 04:40:28] Context::findResourcesPackageInPathWalk: Could not find ./resources/resources.pak in upto 7 parent directories from /usr/local/driveworks/lib/libdw_base.so.5.20
+[15-09-2025 04:40:28] Context::findResourcesPackageInPathWalk: Could not find ./resources/resources.pak in upto 7 parent directories from /usr/local/driveworks-5.20/targets/aarch64-Linux/lib/libdw_base.so.5.20
+[15-09-2025 04:40:28] SDK: No resources(.pak) mounted, some modules will not function properly
+[15-09-2025 04:40:28] [15-09-2025 04:40:28] Initialize DriveWorks SDK v5.20.24
+[15-09-2025 04:40:28] [15-09-2025 04:40:28] Release build with GNU 9.3.0 from buildbrain-branch-0-gb4c0b405b15 against Drive PDK v6.0.10.0
+[15-09-2025 04:40:28] SensorFactory::createSensor() -> time.nvpps, nvpps-device=/dev/nvpps0
+[15-09-2025 04:40:28] Found driver: time.nvpps
+[15-09-2025 04:40:28] Can not create time sensor: DW_HAL_CANNOT_OPEN_CHANNEL: EndpointNVPPS: cannot open NVPPS device with name: /dev/nvpps0
+ Error: Permission denied
+[15-09-2025 04:40:28] SensorFactory::loadPluginLibraryHelper:Succeed to load dynamic lib - /usr/local/driveworks/lib/libsensor_plugin_public_radar.so
+[15-09-2025 04:40:28] Initialize DriveWorks VisualizationSDK v5.20.24
+[15-09-2025 04:40:28] Initialize DriveWorksGL SDK v5.20.24
+[15-09-2025 04:40:28] egl::Display: found 1 EGL devices
+[15-09-2025 04:40:28] egl::Display: use drm device: /dev/dri/card0
+[15-09-2025 04:40:28] fromFile: Loading rig file: /home/pomo/lidar_rig/stereo_rig.json
+[15-09-2025 04:40:28] createFromVehicleVIN: Failed to open a file '/tmp/car_vin' - file likely does not exist - skipping overlay
+[15-09-2025 04:40:28] Rig: missing centerOfMassToFrontAxle parameter
+[15-09-2025 04:40:28] RigConfiguration: rig file contains old 1d throttle and brake maps. Use rig version 1.6.0 with the new throttle and brake maps for a more accurate throttle map.
+[15-09-2025 04:40:28] No valid data file found for camera:front_left in parameter string: camera-name=F008A120RM0AV2,interface=csi-ab,CPHY-mode=1,link=0,output-format=processed,async-record=1,file-buffer-size=16777216 (using configuration folder /home/pomo/lidar_rig/)
+[15-09-2025 04:40:28] No valid data file found for camera:front_right in parameter string: camera-name=F008A120RM0AV2,interface=csi-ab,CPHY-mode=1,link=1,output-format=processed,async-record=1,file-buffer-size=16777216 (using configuration folder /home/pomo/lidar_rig/)
+[15-09-2025 04:40:28] createFromVehicleVIN: Failed to open a file '/tmp/car_vin' - file likely does not exist - skipping overlay
+[15-09-2025 04:40:28] Rig: missing centerOfMassToFrontAxle parameter
+[15-09-2025 04:40:28] RigConfiguration: rig file contains old 1d throttle and brake maps. Use rig version 1.6.0 with the new throttle and brake maps for a more accurate throttle map.
+[15-09-2025 04:40:28] SensorFactory::createSensor() -> camera.gmsl, camera-name=F008A120RM0AV2,interface=csi-ab,CPHY-mode=1,link=0,output-format=processed,async-record=1,file-buffer-size=16777216
+[15-09-2025 04:40:28] Found driver: camera.gmsl
+[15-09-2025 04:40:28] CameraBase: pool size set to 16
+[15-09-2025 04:40:28] SensorFactory::createSensor() -> camera.gmsl.master, 
+[15-09-2025 04:40:28] Found driver: camera.gmsl.master
+[15-09-2025 04:40:29] CameraMaster::parseDevBlock Getting device info list.
+[15-09-2025 04:40:29] devBlock: 0 Slave = 0 Interface = csi-ab Camera_name = F008A120RM0AV2 Link = 0 GroupInit = 0 RecCfg = 1
+[15-09-2025 04:40:29] Camera Match Name: F008A120RM0AV2 Description: Entron F008A120RM0A module - 120-deg FOV, 24-bit capture, MIPI-AR0820, MAX9295 linkIndex: 4294967295 serInfo.Name: MAX9295
+[15-09-2025 04:40:29] Authentication is disabled for camera F008A120RM0AV2
+[15-09-2025 04:40:29] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:29] Client, Setting up information for camera ID 0
+[15-09-2025 04:40:29] Client, successfully found info for camera ID 0 bound to id 0
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 1
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 2
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 3
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 4
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 5
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 6
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 7
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 8
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 9
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 10
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 11
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 12
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 13
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 14
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 15
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 16
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 17
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 18
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 19
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 20
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 21
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 22
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 23
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 24
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 25
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 26
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 27
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 28
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 29
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 30
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 31
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 32
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 33
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 34
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 35
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 36
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 37
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 38
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 39
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 40
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 41
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 42
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 43
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 44
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 45
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 46
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 47
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 48
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] CameraClient: using NITO found at /usr/share/camera/F008A120RM0AV2.nito
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:0:SerialNumber
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:0:SerialNumber
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:0:HardwareVersion
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:0:HardwareVersion
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:0:OemPartNumber
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:0:OemPartNumber
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:0:TemperatureHistogram
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:0:TemperatureHistogram
+[15-09-2025 04:40:29] SensorFactory::createSensor() -> camera.gmsl, camera-name=F008A120RM0AV2,interface=csi-ab,CPHY-mode=1,link=1,output-format=processed,async-record=1,file-buffer-size=16777216
+[15-09-2025 04:40:29] Found driver: camera.gmsl
+[15-09-2025 04:40:29] CameraBase: pool size set to 16
+[15-09-2025 04:40:29] devBlock: 0 Slave = 0 Interface = csi-ab Camera_name = F008A120RM0AV2 Link = 1 GroupInit = 0 RecCfg = 1
+[15-09-2025 04:40:29] Camera Match Name: F008A120RM0AV2 Description: Entron F008A120RM0A module - 120-deg FOV, 24-bit capture, MIPI-AR0820, MAX9295 linkIndex: 4294967295 serInfo.Name: MAX9295
+[15-09-2025 04:40:29] Authentication is disabled for camera F008A120RM0AV2
+[15-09-2025 04:40:29] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:29] Client, Setting up information for camera ID 1
+[15-09-2025 04:40:29] Client, successfully found info for camera ID 1 bound to id 1
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 49
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 50
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 51
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 52
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 53
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 54
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 55
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 56
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 57
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 58
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 59
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 60
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 61
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 62
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 63
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 64
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 65
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 66
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 67
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 68
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 69
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 70
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 71
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 72
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 73
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 74
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 75
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 76
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 77
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 78
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 79
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 80
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 81
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 82
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 83
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 84
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 85
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 86
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 87
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 88
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 89
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 90
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 91
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 92
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 93
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  ImageStreamer(NvMedia -> CUDA) 
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 94
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 95
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:29] Cache count is: 96
+[15-09-2025 04:40:29] GenericImage: generic image cuda
+[15-09-2025 04:40:29] GenericImage: generic image cpu
+[15-09-2025 04:40:29] CameraClient: using NITO found at /usr/share/camera/F008A120RM0AV2.nito
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:1:SerialNumber
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:1:SerialNumber
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:1:HardwareVersion
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:1:HardwareVersion
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:1:OemPartNumber
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:1:OemPartNumber
+[15-09-2025 04:40:29] Adding variable F008A120RM0AV2:csi-ab:1:TemperatureHistogram
+[15-09-2025 04:40:29] Added variable F008A120RM0AV2:csi-ab:1:TemperatureHistogram
+[15-09-2025 04:40:29] SIPLMaster::SIPLMaster: Setting up master camera
+[15-09-2025 04:40:29] Platform: 
+[15-09-2025 04:40:29] Platform Config: 
+[15-09-2025 04:40:29] Description: 
+[15-09-2025 04:40:29] Number of device blocks: 1
+[15-09-2025 04:40:29] Device Block : 0
+[15-09-2025 04:40:29] 	csiPort: 2
+[15-09-2025 04:40:29] 	i2cDevice: 0
+[15-09-2025 04:40:29] 	cphyRate_0: 2000000
+[15-09-2025 04:40:29] 	cphyRate_1: 2000000
+[15-09-2025 04:40:29] 	Deserializer Name: MAX96712_camRecCfg_V1
+[15-09-2025 04:40:29] 	Deserializer Description: Maxim 96712 Aggregator
+[15-09-2025 04:40:29] 	Deserializer i2cAddress: 41
+[15-09-2025 04:40:29] 	Passive Mode: 0
+[15-09-2025 04:40:29] 	Phy Mode: 1
+[15-09-2025 04:40:29] 	Number of camera modules: 2
+[15-09-2025 04:40:29] 	CameraModule index: 0
+[15-09-2025 04:40:29] 		Name :F008A120RM0AV2
+[15-09-2025 04:40:29] 		Description: Entron F008A120RM0A module - 120-deg FOV, 24-bit capture, MIPI-AR0820, MAX9295
+[15-09-2025 04:40:29] 		Serializer name: MAX9295
+[15-09-2025 04:40:29] 		Serializer description: Maxim 9295 Serializer
+[15-09-2025 04:40:29] 		Serializer i2cAdress: 98
+[15-09-2025 04:40:29] 			EEPROM name: N24C64
+[15-09-2025 04:40:29] 			EEPROM i2cAddress: 84
+[15-09-2025 04:40:29] 			EEPROM description: N24C64 EEPROM
+[15-09-2025 04:40:29] 			Sensor ID: 0
+[15-09-2025 04:40:29] 			Sensor name: AR0820
+[15-09-2025 04:40:29] 			Sensor description: OnSemi AR0820 Sensor
+[15-09-2025 04:40:29] 			Sensor isTPGEnabled: 0
+[15-09-2025 04:40:29] 			Sensor i2cAddress: 16
+[15-09-2025 04:40:29] 			Sensor isTriggerMode: 1
+[15-09-2025 04:40:29] 				 cfa: 35
+[15-09-2025 04:40:29] 				 embeddedTopLines: 2
+[15-09-2025 04:40:29] 				 embeddedBottomLines: 4
+[15-09-2025 04:40:29] 				 inputFormat: 8
+[15-09-2025 04:40:29] 				 height: 2168
+[15-09-2025 04:40:29] 				 width: 3848
+[15-09-2025 04:40:29] 				 fps: 30.000000
+[15-09-2025 04:40:29] 				 Embedded Data: 0
+[15-09-2025 04:40:29] 	CameraModule index: 1
+[15-09-2025 04:40:29] 		Name :F008A120RM0AV2
+[15-09-2025 04:40:29] 		Description: Entron F008A120RM0A module - 120-deg FOV, 24-bit capture, MIPI-AR0820, MAX9295
+[15-09-2025 04:40:29] 		Serializer name: MAX9295
+[15-09-2025 04:40:29] 		Serializer description: Maxim 9295 Serializer
+[15-09-2025 04:40:29] 		Serializer i2cAdress: 98
+[15-09-2025 04:40:29] 			EEPROM name: N24C64
+[15-09-2025 04:40:29] 			EEPROM i2cAddress: 84
+[15-09-2025 04:40:29] 			EEPROM description: N24C64 EEPROM
+[15-09-2025 04:40:29] 			Sensor ID: 1
+[15-09-2025 04:40:29] 			Sensor name: AR0820
+[15-09-2025 04:40:29] 			Sensor description: OnSemi AR0820 Sensor
+[15-09-2025 04:40:29] 			Sensor isTPGEnabled: 0
+[15-09-2025 04:40:29] 			Sensor i2cAddress: 16
+[15-09-2025 04:40:29] 			Sensor isTriggerMode: 1
+[15-09-2025 04:40:29] 				 cfa: 35
+[15-09-2025 04:40:29] 				 embeddedTopLines: 2
+[15-09-2025 04:40:29] 				 embeddedBottomLines: 4
+[15-09-2025 04:40:29] 				 inputFormat: 8
+[15-09-2025 04:40:29] 				 height: 2168
+[15-09-2025 04:40:29] 				 width: 3848
+[15-09-2025 04:40:29] 				 fps: 30.000000
+[15-09-2025 04:40:29] 				 Embedded Data: 0
+[15-09-2025 04:40:29] CameraMaster available outputs: 1
+[15-09-2025 04:40:29] CameraMaster available outputs: 1
+[15-09-2025 04:40:29] CameraClient: setting pipeline config for camera ID 0
+[15-09-2025 04:40:29] CameraClient, SIPLNotifier created
+[15-09-2025 04:40:29] CameraClient: setting pipeline config for camera ID 1
+[15-09-2025 04:40:29] CameraClient, SIPLNotifier created
+[15-09-2025 04:40:29] CameraMaster: master initiation
+[15-09-2025 04:40:29] CameraMaster: Bootstrap NvSIPL and ClientPipelines complete
+[15-09-2025 04:40:29] CameraClient: format not specified. Using mp4 in Codec Header.
+[15-09-2025 04:40:29] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:29] CameraClient: format not specified. Using mp4 in Codec Header.
+[15-09-2025 04:40:29] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:29] CameraClient: startImpl: thread id: 6388
+[15-09-2025 04:40:29] CameraClient: initializeAndStartCameras: thread id: 6388
+MAX96712: Revision 5 detected
+MAX96712 Link 0: PHY optimization was enabled
+MAX96712 Link 1: PHY optimization was enabled
+MAX9295: Revision 5 detected!
+Sensor AR0820 GRBG Rev 2.1 detected!
+MAX9295: Revision 5 detected!
+Sensor AR0820 GRBG Rev 2.1 detected!
+[15-09-2025 04:40:30] CameraMaster: resume NvSIPL and ClientPipelines completed
+[15-09-2025 04:40:30] SyncDriver: GPU device available, enabling CUDA sync
+[15-09-2025 04:40:30] SyncDriver: enableCUDAPresync, object successfully created 
+[15-09-2025 04:40:30] CameraClient::readEEPROMInfo:  
+[15-09-2025 04:40:30] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:30] 		 mmIntrinsicModelID:  27
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[0]: -0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[1]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[2]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[3]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[4]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[5]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[6]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[7]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[8]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[9]: 1.892143e+11
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[10]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[11]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[12]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[13]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[14]: 0.000170
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[15]: 8.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicMeasuredFlagID: 237
+[15-09-2025 04:40:30] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:30] 		 fwVersionMajor:  0
+[15-09-2025 04:40:30] 		 fwVersionMinor:  0
+[15-09-2025 04:40:30] 		 fwVersionPatch:  0
+[15-09-2025 04:40:30] CameraClient: format not specified. Using mp4 in Codec Header.
+[15-09-2025 04:40:30] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:30] CameraMaster: starting...
+[15-09-2025 04:40:30]  CameraClient::bootstrapEEPROM() EEPROM already bootstrapped, skipping eeprom read
+[15-09-2025 04:40:30] CameraClient: format not specified. Using mp4 in Codec Header.
+[15-09-2025 04:40:30] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:30] CameraClient: allocating image pool for ICP
+[15-09-2025 04:40:30] Allocating NvSci group
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 97
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 98
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 99
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 100
+[15-09-2025 04:40:30] CameraClient: allocate image pool for 0
+[15-09-2025 04:40:30] Allocating NvSci ISP0 images
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 101
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 102
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 103
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 104
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 105
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 106
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 107
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 108
+[15-09-2025 04:40:30] eventQueuePollCustomInterface: Custom interface is not available. This is expected if bootstrap is not complete
+[15-09-2025 04:40:30] SyncDriverInitializer::updateHasTaskStatus: cannot get num task slots from NvSciSyncAttrList 256
+[15-09-2025 04:40:30] SyncDriver: GPU device available, enabling CUDA sync
+[15-09-2025 04:40:30] SyncDriver: enableCUDAPresync, object successfully created 
+[15-09-2025 04:40:30] CameraClient::readEEPROMInfo:  
+[15-09-2025 04:40:30] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:30] 		 mmIntrinsicModelID:  27
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[0]: -0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[1]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[2]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[3]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[4]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[5]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[6]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[7]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[8]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[9]: 1.892143e+11
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[10]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[11]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[12]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[13]: 0.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[14]: 0.000170
+[15-09-2025 04:40:30] 		 mmIntrinsicCoeff[15]: 8.000000
+[15-09-2025 04:40:30] 		 mmIntrinsicMeasuredFlagID: 237
+[15-09-2025 04:40:30] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:30] 		 fwVersionMajor:  0
+[15-09-2025 04:40:30] 		 fwVersionMinor:  0
+[15-09-2025 04:40:30] 		 fwVersionPatch:  0
+[15-09-2025 04:40:30] CameraClient: format not specified. Using mp4 in Codec Header.
+[15-09-2025 04:40:30] Not an EEPROM supported camera F008A120RM0AV2
+[15-09-2025 04:40:30] CameraClient: allocating image pool for ICP
+[15-09-2025 04:40:30] Allocating NvSci group
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 109
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 110
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 111
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 112
+[15-09-2025 04:40:30] CameraClient: allocate image pool for 0
+[15-09-2025 04:40:30] Allocating NvSci ISP0 images
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 113
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 114
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 115
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 116
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 117
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 118
+[15-09-2025 04:40:30] GenericImage: generic image nvm
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 119
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 1 accessMode: 3 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 120
+[15-09-2025 04:40:30] SyncDriverInitializer::updateHasTaskStatus: cannot get num task slots from NvSciSyncAttrList 256
+[15-09-2025 04:40:30] CameraMaster: Error 6 while getting the deserializer interface provider for Devblk ID 0
+[15-09-2025 04:40:30] CameraClient: startImpl: thread id: 6388
+[15-09-2025 04:40:30] CameraClient: initializeAndStartCameras: thread id: 6388
+[15-09-2025 04:40:30] CameraMaster: sensor has already started.
+[15-09-2025 04:40:30] SyncDriver: GPU device available, enabling CUDA sync
+[15-09-2025 04:40:30] SyncDriver: enableCUDAPresync, object successfully created 
+[15-09-2025 04:40:30] SyncDriverInitializer::updateHasTaskStatus: cannot get num task slots from NvSciSyncAttrList 256
+[15-09-2025 04:40:30] SyncDriver: GPU device available, enabling CUDA sync
+[15-09-2025 04:40:30] SyncDriver: enableCUDAPresync, object successfully created 
+[15-09-2025 04:40:30] SyncDriverInitializer::updateHasTaskStatus: cannot get num task slots from NvSciSyncAttrList 256
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 0 accessMode: 1 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 121
+[15-09-2025 04:40:30] Rectifier: distortion map recalculated.
+[15-09-2025 04:40:30]  Try allocate texture cache! filterMode: 1 readMode: 0 accessMode: 1 fromImage: 1
+[15-09-2025 04:40:30] Cache count is: 122
+[15-09-2025 04:40:30] Rectifier: distortion map recalculated.
+[15-09-2025 04:40:30] Rectifier::~Rectifier: NvMediaLDCDestroy done!
+[15-09-2025 04:40:30] Rectifier::~Rectifier: NvMediaLDCDestroy done!
+[15-09-2025 04:40:30] Driveworks exception thrown: DW_INVALID_ARGUMENT: CameraModel: can support images of maximal 65535x65535 size
+
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  [2025-09-15 05:40:30] DW Error DW_INVALID_ARGUMENT executing DW function:
+ dwStereoRectifier_initialize(&m_stereoRectifier, m_cameraModel[0], m_cameraModel[1], left2Rig, right2Rig, m_context)
+ at /usr/local/driveworks/samples/src/sensors/stereo_disparity/main.cpp:836
