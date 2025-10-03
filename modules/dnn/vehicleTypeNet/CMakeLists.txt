@@ -37,6 +37,8 @@ project(vehicleTypeNet)
 #-------------------------------------------------------------------------------
 set(SOURCES
     YoloProcessing.hpp
+    vehicleTypeNetProcessing.hpp
+    vehicleTypeNetProcessing.cpp
     main.cpp
 )
 

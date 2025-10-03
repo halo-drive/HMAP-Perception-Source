@@ -67,6 +67,8 @@
 #include <framework/SimpleCamera.hpp>
 #include <framework/SimpleStreamer.hpp>
 
+#include "vehicleTypeNetProcessing.hpp"
+
 using namespace dw_samples::common;
 
 class DNNTensorSample : public DriveWorksSample
@@ -138,6 +140,10 @@ private:
     } YoloScoreRect;
 
     std::vector<std::string> m_label;
+    //vehicle type net 
+
+    std::unique_ptr<VehicleTypeNetProcessor> m_vtProcessor;
+    std::vector<VehicleTypeNetProcessor::ClassificationResult> m_vehicleTypes;
 
     // ------------------------------------------------
     // Renderer
@@ -190,6 +196,7 @@ public:
         prepareInputFrame();
         doInference();
         returnStreamedOutput();
+        classifyVehicles();
     }
 
     ///------------------------------------------------------------------------------
@@ -224,6 +231,21 @@ public:
         CHECK_DW_ERROR(dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_BOXES_2D,
                                              m_detectedBoxListFloat.data(), sizeof(dwRectf), 0,
                                              m_detectedBoxListFloat.size(), m_renderEngine));
+        
+                                             CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine));
+        for (size_t i = 0; i < m_vehicleTypes.size(); ++i) {
+            if (m_vehicleTypes[i].valid) {
+                const dwRectf& bbox = m_detectedBoxListFloat[i];
+                std::string label = std::string(VehicleTypeNetProcessor::VEHICLE_TYPE_NAMES[m_vehicleTypes[i].classIndex]) +
+                                " " + std::to_string(static_cast<int>(m_vehicleTypes[i].confidence * 100)) + "%";
+                
+                CHECK_DW_ERROR(dwRenderEngine_renderText2D(
+                    label.c_str(),
+                    {bbox.x, bbox.y - 25.0f},
+                    m_renderEngine));
+            }
+        }
+    
     }
 
     ///------------------------------------------------------------------------------
@@ -381,19 +403,34 @@ protected:
         m_dlaEngineNo = std::atoi(getArgument("dla-engine").c_str());
 #endif
         // If not specified, load the correct network based on platform
-        std::string tensorRTModel = getArgument("tensorRT_model");
-        if (tensorRTModel.empty())
+        std::string yoloModel = getArgument("tensorRT_model");
+        if (yoloModel.empty())
         {
-            tensorRTModel = dw_samples::SamplesDataPath::get() + "/samples/detector/";
-            tensorRTModel += getPlatformPrefix();
-            tensorRTModel += "/tensorRT_model";
+            yoloModel = dw_samples::SamplesDataPath::get() + "/samples/detector/";
+            yoloModel += getPlatformPrefix();
+            yoloModel += "/yolov3_640x640";
             if (m_usecuDLA)
-                tensorRTModel += ".dla";
-            tensorRTModel += ".bin";
+                yoloModel += ".dla";
+            yoloModel += ".bin";
         }
+        std::string vtModelPath = dw_samples::SamplesDataPath::get() + 
+                              "/samples/detector/";
+        vtModelPath += getPlatformPrefix();
+        vtModelPath += "/vehicletypenet";
+        if (m_usecuDLA)
+            vtModelPath += ".dla";
+        vtModelPath += ".bin";
+        
+        m_vtProcessor.reset(new VehicleTypeNetProcessor(
+            m_sdk,
+            m_cudaStream,
+            vtModelPath,
+            m_usecuDLA ? DW_PROCESSOR_TYPE_CUDLA : DW_PROCESSOR_TYPE_GPU,
+            m_dlaEngineNo));
+        
 
         // Initialize DNN from a TensorRT file
-        CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFileWithEngineId(&m_dnn, tensorRTModel.c_str(), nullptr,
+        CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFileWithEngineId(&m_dnn, yoloModel.c_str(), nullptr,
                                                                     m_usecuDLA ? DW_PROCESSOR_TYPE_CUDLA : DW_PROCESSOR_TYPE_GPU,
                                                                     m_dlaEngineNo, m_sdk));
 
@@ -536,6 +573,28 @@ protected:
         }
     }
 
+    void classifyVehicles()
+    {
+        m_vehicleTypes.clear();
+        m_vehicleTypes.reserve(m_detectedBoxListFloat.size());
+        
+        for (const auto& bbox : m_detectedBoxListFloat) {
+            // Convert dwRectf to dwRect with bounds checking
+            dwRect cropRegion;
+            cropRegion.x = std::max(0, static_cast<int32_t>(bbox.x));
+            cropRegion.y = std::max(0, static_cast<int32_t>(bbox.y));
+            cropRegion.width = std::min(
+                static_cast<uint32_t>(bbox.width),
+                m_imageWidth - cropRegion.x);
+            cropRegion.height = std::min(
+                static_cast<uint32_t>(bbox.height),
+                m_imageHeight - cropRegion.y);
+            
+            auto result = m_vtProcessor->classify(m_imageRGBA, cropRegion);
+            m_vehicleTypes.push_back(result);
+        }
+    }
+
     void releaseRender()
     {
         // Release render engine
@@ -571,6 +630,7 @@ protected:
 
         // Release detector
         CHECK_DW_ERROR(dwDNN_release(m_dnn));
+        m_vtProcessor.reset();
         // Release data conditioner
         CHECK_DW_ERROR(dwDataConditioner_release(m_dataConditioner));
     }
