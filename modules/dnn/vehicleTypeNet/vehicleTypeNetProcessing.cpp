@@ -170,11 +170,20 @@ void VehicleTypeNetProcessor::initializeDNN(const std::string& modelPath)
 VehicleTypeNetProcessor::ClassificationResult 
 VehicleTypeNetProcessor::classify(
     dwImageHandle_t sourceImage,
-    const dwRect& cropRegion)
+    const dwRect& cropRegion,
+    cudaStream_t stream)
 {
     ClassificationResult result;
 
     try {
+        
+        // Set CUDA stream for this classification operation
+        if (stream != 0 && stream != m_cudaStream)
+        {
+            CHECK_DW_ERROR(dwDNN_setCUDAStream(stream, m_dnn));
+            m_cudaStream = stream;  // Update cached stream
+        }
+        
         // Prepare cropped input through data conditioner
         CHECK_DW_ERROR(dwDataConditioner_prepareData(
             m_inputTensor,

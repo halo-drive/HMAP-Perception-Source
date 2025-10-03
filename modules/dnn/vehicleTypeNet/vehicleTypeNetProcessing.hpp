@@ -67,7 +67,8 @@ public:
      */
     ClassificationResult classify(
         dwImageHandle_t sourceImage,
-        const dwRect& cropRegion);
+        const dwRect& cropRegion,
+        cudaStream_t stream =0);
 
     /**
      * @brief Batch classification (future optimization)

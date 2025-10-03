@@ -16,7 +16,7 @@
 // components in life support devices or systems without express written approval of
 // NVIDIA CORPORATION & AFFILIATES.
 //
-// SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 //
 // NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
@@ -29,35 +29,28 @@
 /////////////////////////////////////////////////////////////////////////////////////////
 
 #include <string>
-
 #include <framework/SamplesDataPath.hpp>
 #include <framework/ProgramArguments.hpp>
-
 #include "YoloProcessing.hpp"
 
 int main(int argc, const char** argv)
 {
-    // -------------------
-    // define all arguments used by the application
     ProgramArguments args(argc, argv,
-                          {
+    {
+        ProgramArguments::Option_t("rig", (dw_samples::SamplesDataPath::get() + "/samples/sensors/camera/camera/rig_4cam.json").c_str(), "Rig configuration for multi-camera setup"),
 #ifdef VIBRANTE
-                              ProgramArguments::Option_t("camera-type", "ar0231-rccb-bae-sf3324", "camera gmsl type (see sample_sensors_info for all available camera types on this platform)"),
-                              ProgramArguments::Option_t("camera-group", "a", "input port"),
-                              ProgramArguments::Option_t("camera-index", "0", "camera index within the camera-group 0-3"),
-                              ProgramArguments::Option_t("input-type", "video", "input type either video or camera"),
-                              ProgramArguments::Option_t("cudla", "0", "run inference on cudla"),
-                              ProgramArguments::Option_t("dla-engine", "0", "dla engine number to run on if --cudla=1"),
+        ProgramArguments::Option_t("cudla", "0", "run inference on cuDLA (0=GPU, 1=DLA)"),
+        ProgramArguments::Option_t("dla-engine", "0", "DLA engine number (0 or 1) if cudla=1"),
 #endif
-                              ProgramArguments::Option_t("video", (dw_samples::SamplesDataPath::get() + "/samples/sfm/triangulation/video_0.h264").c_str(), "path to video"),
-                              ProgramArguments::Option_t("tensorRT_model", "", (std::string("path to TensorRT model file. By default: ") + dw_samples::SamplesDataPath::get() + "/samples/detector/<gpu-architecture>/tensorRT_model.bin").c_str())},
-                          "DNN Tensor sample which detects and tracks cars.");
-
+        ProgramArguments::Option_t("tensorRT_model", "", (std::string("Path to TensorRT model file. Default: ") + dw_samples::SamplesDataPath::get() + "/samples/detector/<gpu-architecture>/yolov3_640x640.bin").c_str())
+    },
+    "Multi-Camera Vehicle Detection and Type Classification with YOLO + VehicleTypeNet");
+    
     DNNTensorSample app(args);
-    app.initializeWindow("DNN Tensor Sample", 1280, 800, args.enabled("offscreen"));
-
+    app.initializeWindow("Multi-Camera AutoVehicleTypeNet", 1280, 800, args.enabled("offscreen"));
+    
     if (!args.enabled("offscreen"))
         app.setProcessRate(30);
-
+    
     return app.run();
 }
