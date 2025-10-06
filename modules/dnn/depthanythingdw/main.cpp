@@ -872,11 +872,11 @@ void MultiStreamDepthEstimationApp::collectDepthResults(uint32_t cameraIdx, Came
         std::lock_guard<std::mutex> lock(ctx.depthMutex);
         processDepthOutput(cameraIdx, ctx);
         
-        // TEMPORARILY DISABLE VISUALIZATION
-        // if (ctx.minDepth < ctx.maxDepth)
-        // {
-        //     createDepthVisualization(cameraIdx, ctx);
-        // }
+        
+         if (ctx.minDepth < ctx.maxDepth)
+         {
+             createDepthVisualization(cameraIdx, ctx);
+         }
     }
 
     CHECK_DW_ERROR(dwDNNTensorStreamer_consumerReturn(&ctx.depthOutputHost, ctx.depthOutputStreamer));
@@ -1130,7 +1130,7 @@ void MultiStreamDepthEstimationApp::onRenderHelper(dwCameraFrameHandle_t frame, 
 
 void MultiStreamDepthEstimationApp::visualizeDepthMap(uint32_t cameraIdx)
 {
-    return ; // TEMPORARILY DISABLE VISUALIZATION
+    
     CameraDepthContext& ctx = m_cameraContexts[cameraIdx];
     
     if (!ctx.resultsReady.load())
