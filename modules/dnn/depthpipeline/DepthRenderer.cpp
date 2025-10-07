@@ -31,6 +31,14 @@ DepthRenderer::DepthRenderer(dwContextHandle_t context)
     , m_colorScheme(ColorScheme::JET_COLORMAP)
     , m_showStats(true)
 {
+    // Initialize all camera contexts to safe defaults
+    for (uint32_t i = 0; i < 4; ++i) {
+        m_cameraContexts[i].cudaStream = nullptr;
+        m_cameraContexts[i].streamerGL = DW_NULL_HANDLE;
+        m_cameraContexts[i].depthImageRGBA = DW_NULL_HANDLE;
+        m_cameraContexts[i].tileId = 0;
+    }
+    
     // Initialize state
     for (uint32_t i = 0; i < 4; ++i) {
         m_state.dataAvailable[i] = false;
@@ -40,12 +48,12 @@ DepthRenderer::DepthRenderer(dwContextHandle_t context)
     }
 }
 
+
 DepthRenderer::~DepthRenderer()
 {
     std::cout << "Releasing depth renderer resources..." << std::endl;
     
-    // Release per-camera resources
-    for (uint32_t i = 0; i < m_cameraContexts.size(); ++i) {
+    for (uint32_t i = 0; i < m_config.numCameras && i < m_cameraContexts.size(); ++i) {
         CameraRenderContext& ctx = m_cameraContexts[i];
         
         if (ctx.cudaStream) {
@@ -64,7 +72,7 @@ DepthRenderer::~DepthRenderer()
     // Release visualization state images
     for (uint32_t i = 0; i < 4; ++i) {
         if (m_state.depthVisualization[i] != DW_NULL_HANDLE) {
-            dwImage_destroy(m_state.depthVisualization[i]);
+            m_state.depthVisualization[i] = DW_NULL_HANDLE;  // Clear reference (owned by context)
         }
     }
     
@@ -81,7 +89,6 @@ DepthRenderer::~DepthRenderer()
 }
 
 
-
 dwStatus DepthRenderer::initialize(const RenderConfig& config)
 {
     m_config = config;
@@ -92,7 +99,6 @@ dwStatus DepthRenderer::initialize(const RenderConfig& config)
     std::cout << "  Window: " << config.windowWidth << "×" << config.windowHeight << std::endl;
     std::cout << "  Cameras: " << config.numCameras << std::endl;
     
-
     // Initialize visualization context
     dwStatus status = dwVisualizationInitialize(&m_viz, m_context);
     if (status != DW_SUCCESS) {
@@ -101,15 +107,19 @@ dwStatus DepthRenderer::initialize(const RenderConfig& config)
         return status;
     }
     
-    // Initialize render engine
+    // Initialize render engine (SIMPLIFIED - matching standalone pattern)
     dwRenderEngineParams engineParams;
-    CHECK_DW_ERROR(dwRenderEngine_initDefaultParams(&engineParams, config.windowWidth, config.windowHeight));
+    CHECK_DW_ERROR(dwRenderEngine_initDefaultParams(&engineParams, 
+                                                     config.windowWidth, 
+                                                     config.windowHeight));
     
     engineParams.defaultTile.lineWidth = 2.0f;
-    engineParams.defaultTile.font = DW_RENDER_ENGINE_FONT_VERDANA_16;
+    engineParams.defaultTile.font = DW_RENDER_ENGINE_FONT_VERDANA_20;
     engineParams.maxBufferCount = 1;
-    engineParams.bounds = {0, 0, static_cast<float32_t>(config.windowWidth), 
-                          static_cast<float32_t>(config.windowHeight)};
+    
+    float32_t windowSize[2] = {static_cast<float32_t>(config.windowWidth),
+                               static_cast<float32_t>(config.windowHeight)};
+    engineParams.bounds = {0, 0, windowSize[0], windowSize[1]};
     
     status = dwRenderEngine_initialize(&m_renderEngine, &engineParams, m_viz);
     if (status != DW_SUCCESS) {
@@ -118,24 +128,29 @@ dwStatus DepthRenderer::initialize(const RenderConfig& config)
         return status;
     }
     
-    // Configure tile layout based on number of cameras
-    uint32_t tilesPerRow = 2; // 2×2 grid for 4 cameras
-    if (config.numCameras <= 2) {
-        tilesPerRow = config.numCameras;
+    // Configure tile layout (matching standalone pattern)
+    uint32_t tilesPerRow = 1;
+    if (config.numCameras == 2) {
+        tilesPerRow = 2;
+    } else if (config.numCameras >= 3 && config.numCameras <= 4) {
+        tilesPerRow = 2;
+    } else if (config.numCameras > 4) {
+        tilesPerRow = 4;
     }
     
-    // Create render tiles for depth visualization
+    // Create render tiles
     std::vector<dwRenderEngineTileState> tileStates(config.numCameras);
     std::vector<uint32_t> tileIds(config.numCameras);
     
     for (uint32_t i = 0; i < config.numCameras; ++i) {
         dwRenderEngine_initTileState(&tileStates[i]);
         tileStates[i].modelViewMatrix = DW_IDENTITY_MATRIX4F;
-        tileStates[i].font = DW_RENDER_ENGINE_FONT_VERDANA_16;
+        tileStates[i].font = DW_RENDER_ENGINE_FONT_VERDANA_20;
     }
     
     CHECK_DW_ERROR(dwRenderEngine_addTilesByCount(tileIds.data(), config.numCameras, 
-                                                   tilesPerRow, tileStates.data(), m_renderEngine));
+                                                   tilesPerRow, tileStates.data(), 
+                                                   m_renderEngine));
     
     // Initialize per-camera rendering resources
     dwImageProperties depthVizProps{};
@@ -147,7 +162,7 @@ dwStatus DepthRenderer::initialize(const RenderConfig& config)
     for (uint32_t i = 0; i < config.numCameras; ++i) {
         CameraRenderContext& ctx = m_cameraContexts[i];
         
-        // Create CUDA stream for visualization
+        // Create CUDA stream
         cudaError_t cudaStatus = cudaStreamCreate(&ctx.cudaStream);
         if (cudaStatus != cudaSuccess) {
             std::cerr << "ERROR: Failed to create CUDA stream for camera " << i 
@@ -165,10 +180,11 @@ dwStatus DepthRenderer::initialize(const RenderConfig& config)
         // Store tile ID
         ctx.tileId = tileIds[i];
         
-        // Create state visualization image (reference to context image)
+        // Create state visualization image reference
         m_state.depthVisualization[i] = ctx.depthImageRGBA;
         
-        std::cout << "  Camera " << i << " render context initialized (tile " << ctx.tileId << ")" << std::endl;
+        std::cout << "  Camera " << i << " render context initialized (tile " 
+                  << ctx.tileId << ")" << std::endl;
     }
     
     std::cout << "Depth renderer initialization complete" << std::endl;

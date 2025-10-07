@@ -12,6 +12,8 @@
 #include <thread>
 #include <memory>
 
+class WindowGLFW;
+
 namespace depth_pipeline {
 
 /**
@@ -36,9 +38,9 @@ public:
         std::string depthModelPath;
         PipelineMode mode;
         uint32_t targetFPS;
+        bool enableVisualization;
         uint32_t windowWidth;
         uint32_t windowHeight;
-        bool enableVisualization;
     };
     
     struct PipelineStatistics {
@@ -84,21 +86,22 @@ public:
      */
     dwStatus processFrame();
     
+    bool isRunning() const { return m_running.load(); }
+    bool shouldRender() const;
+    void swapBuffers();
+
     /**
      * @brief Get pipeline statistics
      */
     PipelineStatistics getStatistics() const;
-    
-    /**
-     * @brief Check if pipeline is running
-     */
-    bool isRunning() const { return m_running.load(); }
+
 
 private:
     // DriveWorks core handles
     dwContextHandle_t m_context;
     dwSALHandle_t m_sal;
     
+    std::unique_ptr<WindowGLFW> m_window;
     // Pipeline modules
     std::unique_ptr<CameraCapture> m_cameraCapture;
     std::unique_ptr<DepthInferenceEngine> m_inferenceEngine;

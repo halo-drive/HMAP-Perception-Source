@@ -2,7 +2,7 @@
 #include "DepthPipeline.hpp"
 #include <framework/Checks.hpp>
 #include <framework/Log.hpp>
-
+#include <framework/WindowGLFW.hpp>
 
 #ifdef VIBRANTE
 #include <EGL/egl.h>  
@@ -10,6 +10,7 @@
 
 #include <iostream>
 #include <sstream>
+
 
 namespace depth_pipeline {
 
@@ -230,6 +231,19 @@ dwStatus DepthPipeline::processFrame()
     return overallStatus;
 }
 
+
+bool DepthPipeline::shouldRender() const
+{
+    return m_config.enableVisualization && m_window;
+}
+
+void DepthPipeline::swapBuffers()
+{
+    if (m_window) {
+        m_window->swapBuffers();
+    }
+}
+
 DepthPipeline::PipelineStatistics DepthPipeline::getStatistics() const
 {
     PipelineStatistics stats;
@@ -284,31 +298,57 @@ DepthPipeline::PipelineStatistics DepthPipeline::getStatistics() const
     return stats;
 }
 
+
 dwStatus DepthPipeline::initializeContext()
 {
     std::cout << "Initializing DriveWorks context..." << std::endl;
     
-    // Initialize logger
+    // Step 1: Create window FIRST (before DriveWorks context)
+    if (m_config.enableVisualization) {
+        std::cout << "Creating rendering window..." << std::endl;
+        
+        try {
+            m_window.reset(new WindowGLFW(
+                "Depth Pipeline Visualization",
+                m_config.windowWidth,
+                m_config.windowHeight,
+                false  // not offscreen
+            ));
+            
+            if (!m_window) {
+                std::cerr << "ERROR: Failed to allocate window" << std::endl;
+                return DW_FAILURE;
+            }
+            
+            std::cout << "Window created successfully" << std::endl;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "ERROR: Window creation exception: " << e.what() << std::endl;
+            return DW_FAILURE;
+        }
+    }
+    
+    // Step 2: Initialize logger
     dwStatus status = dwLogger_initialize(getConsoleLoggerCallback(true));
     if (status != DW_SUCCESS) {
         std::cerr << "ERROR: Failed to initialize logger: " << dwGetStatusName(status) << std::endl;
         return status;
     }
     
-    // Set log level based on configuration
     dwLoggerVerbosity logLevel = DW_LOG_VERBOSE;
     if (m_config.mode == PipelineMode::DATA_COLLECTION) {
-        logLevel = DW_LOG_WARN; // Reduce logging overhead in data collection mode
+        logLevel = DW_LOG_WARN;
     }
     dwLogger_setLogLevel(logLevel);
     
-    // Initialize DriveWorks context
+    // Step 3: Initialize DriveWorks context WITH EGL display
     dwContextParameters sdkParams{};
     memset(&sdkParams, 0, sizeof(dwContextParameters));
     
 #ifdef VIBRANTE
-    // On NVIDIA DRIVE platforms - headless rendering mode
-    sdkParams.eglDisplay = EGL_NO_DISPLAY;
+    if (m_window) {
+        sdkParams.eglDisplay = m_window->getEGLDisplay();  // GET FROM WINDOW
+    }
 #endif
     
     status = dwInitialize(&m_context, DW_VERSION, &sdkParams);
@@ -318,7 +358,7 @@ dwStatus DepthPipeline::initializeContext()
         return status;
     }
     
-    // Query GPU information
+    // Step 4: Query GPU information (unchanged)
     int32_t currentGPU = 0;
     dwGPUDeviceProperties gpuProps{};
     
@@ -328,45 +368,16 @@ dwStatus DepthPipeline::initializeContext()
         if (status == DW_SUCCESS) {
             std::cout << "GPU Information:" << std::endl;
             std::cout << "  Compute Capability: " << gpuProps.major << "." << gpuProps.minor << std::endl;
-            
-            // Architecture identification
-            if (gpuProps.major == 8 && gpuProps.minor == 7) {
-                std::cout << "  Architecture: Ampere (AGX Orin)" << std::endl;
-            } else if (gpuProps.major == 8 && gpuProps.minor == 6) {
-                std::cout << "  Architecture: Ampere (Orin Nano)" << std::endl;
-            } else if (gpuProps.major == 7 && gpuProps.minor == 2) {
-                std::cout << "  Architecture: Volta (Xavier)" << std::endl;
-            } else {
-                std::cout << "  Architecture: SM_" << gpuProps.major << gpuProps.minor << std::endl;
-            }
-            
-            // Memory hierarchy information
+            std::cout << "  Architecture: " << (gpuProps.major == 8 && gpuProps.minor == 7 ? "Ampere (AGX Orin)" : "Other") << std::endl;
             std::cout << "  Memory Bus Width: " << gpuProps.memoryBusWidth << " bits" << std::endl;
-            std::cout << "  L2 Cache: " << (gpuProps.l2CacheSize / 1024) << " KB" << std::endl;
-            std::cout << "  Constant Memory: " << (gpuProps.totalConstMem / 1024) << " KB" << std::endl;
-            std::cout << "  Shared Memory per Block: " << (gpuProps.sharedMemPerBlock / 1024) << " KB" << std::endl;
-            
-            // Device type (using confirmed 'integrated' field)
             std::cout << "  Type: " << (gpuProps.integrated ? "Integrated" : "Discrete") << std::endl;
-            
-            // Compute capabilities
-            std::cout << "  Max Threads per Block: " << gpuProps.maxThreadsPerBlock << std::endl;
-            std::cout << "  Warp Size: " << gpuProps.warpSize << std::endl;
-            std::cout << "  Concurrent Kernels: " << (gpuProps.concurrentKernels ? "Yes" : "No") << std::endl;
-            
-        } else {
-            std::cerr << "WARNING: Failed to query GPU properties: " << dwGetStatusName(status) << std::endl;
         }
-    } else {
-        std::cerr << "WARNING: Failed to get current GPU device: " << dwGetStatusName(status) << std::endl;
     }
-    
     
     std::cout << "DriveWorks SDK initialized" << std::endl;
     
     return DW_SUCCESS;
 }
-
 
 dwStatus DepthPipeline::stageCaptureFrames(CameraCapture::CaptureResult& result)
 {
