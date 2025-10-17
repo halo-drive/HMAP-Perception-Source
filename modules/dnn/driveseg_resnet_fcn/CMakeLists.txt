@@ -1,8 +1,7 @@
 project(driveseg_resnet_fcn)
 
 set(SOURCES
-    DrivableAreaSegmentation.cpp
-    main.cpp
+    main.cu
 )
 
 set(LIBRARIES
