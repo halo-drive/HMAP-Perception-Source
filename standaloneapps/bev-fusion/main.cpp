@@ -319,8 +319,8 @@ public:
     dwSensorParams lidarParams = {};
     lidarParams.protocol = "lidar.socket";
     
-    // Create parameters string following the NVIDIA format
-    std::string paramString = "ip=" + m_lidarIP + ",port=" + std::to_string(m_lidarPort) + ",device=VELO_VLP16,scan-frequency=10.0";
+    // Create parameters string following the NVIDIA format (only supported parameters)
+    std::string paramString = "ip=" + m_lidarIP + ",port=" + std::to_string(m_lidarPort) + ",device=VELO_VLP16,scan-frequency=5.0,protocol=udp";
     lidarParams.parameters = paramString.c_str();
     
         LidarData lidar;
@@ -483,9 +483,12 @@ public:
         camera.name = std::string(cameraName);
         camera.isBlackImage = false;
         
-        // CRITICAL FIX: Initialize CPU streamer for BEVFusion processing
+        // CRITICAL FIX: Initialize CPU streamer for BEVFusion processing with correct format
         dwImageProperties imageProperties;
-        CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&imageProperties, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, camera.sensor));
+        imageProperties.type = DW_IMAGE_CUDA;
+        imageProperties.format = DW_IMAGE_FORMAT_RGB_UINT8;  // RGB for BEVFusion
+        imageProperties.width = BEVFUSION_IMAGE_WIDTH;       // Use BEVFusion dimensions
+        imageProperties.height = BEVFUSION_IMAGE_HEIGHT;
         CHECK_DW_ERROR(dwImageStreamer_initialize(&camera.streamerToCPU, &imageProperties, DW_IMAGE_CPU, m_context));
         
         log("Camera %d (%s): live camera with CPU streamer initialized\n", i, camera.name.c_str());
@@ -495,11 +498,19 @@ public:
     camera.isBlackImage = true;
     camera.name = "black_camera_" + std::to_string(i);
     
+    // CRITICAL FIX: Initialize CPU streamer for black image cameras too (following NVIDIA pattern)
+    dwImageProperties imageProperties;
+    imageProperties.type = DW_IMAGE_CUDA;
+    imageProperties.format = DW_IMAGE_FORMAT_RGB_UINT8;
+    imageProperties.width = BEVFUSION_IMAGE_WIDTH;
+    imageProperties.height = BEVFUSION_IMAGE_HEIGHT;
+    CHECK_DW_ERROR(dwImageStreamer_initialize(&camera.streamerToCPU, &imageProperties, DW_IMAGE_CPU, m_context));
+    
     size_t imageSize = BEVFUSION_IMAGE_WIDTH * BEVFUSION_IMAGE_HEIGHT * 3;
     camera.imageData = new unsigned char[imageSize];
     memset(camera.imageData, 0, imageSize);
     
-    log("Camera %d (%s): black image\n", i, camera.name.c_str());
+    log("Camera %d (%s): black image with CPU streamer\n", i, camera.name.c_str());
     }
     
     m_cameras.push_back(camera);
@@ -520,15 +531,27 @@ public:
     log("Added black image camera %d (no real camera available)\n", i);
     }
     
-    // Log camera mapping for BEVFusion order
-    log("=== Camera Mapping for BEVFusion ===\n");
-    log("BEVFusion Index 0 (FRONT): %s\n", m_cameras[0].isBlackImage ? "BLACK IMAGE" : m_cameras[0].name.c_str());
-    log("BEVFusion Index 1 (FRONT_RIGHT): %s\n", m_cameras[1].isBlackImage ? "BLACK IMAGE" : m_cameras[1].name.c_str());
-    log("BEVFusion Index 2 (FRONT_LEFT): %s\n", m_cameras[2].isBlackImage ? "BLACK IMAGE" : m_cameras[2].name.c_str());
-    log("BEVFusion Index 3 (BACK): %s\n", m_cameras[3].isBlackImage ? "BLACK IMAGE" : m_cameras[3].name.c_str());
-    log("BEVFusion Index 4 (BACK_LEFT): %s\n", m_cameras[4].isBlackImage ? "BLACK IMAGE" : m_cameras[4].name.c_str());
-    log("BEVFusion Index 5 (BACK_RIGHT): %s\n", m_cameras[5].isBlackImage ? "BLACK IMAGE" : m_cameras[5].name.c_str());
-    log("=====================================\n");
+    // Log rig camera indices and names for verification
+    log("=== Rig camera indices and names ===\n");
+    for (size_t i = 0; i < m_cameras.size(); ++i) {
+        log("rig[%zu] name=%s (black=%s)\n", i, m_cameras[i].name.c_str(), m_cameras[i].isBlackImage ? "true" : "false");
+    }
+    log("====================================\n");
+    
+    // Log intended BEVFusion mapping (BEV indices -> rig indices)
+    log("=== Intended Camera Mapping for BEVFusion (index -> rig[name]) ===\n");
+    auto name_or_black = [&](int rigIdx)->const char*{
+        if (rigIdx < 0 || rigIdx >= (int)m_cameras.size()) return "BLACK IMAGE";
+        return m_cameras[rigIdx].isBlackImage ? "BLACK IMAGE" : m_cameras[rigIdx].name.c_str();
+    };
+    // Target mapping: 0=-1, 1=1, 2=0, 3=-1, 4=2, 5=3
+    log("0 FRONT       -> %s\n", name_or_black(-1));
+    log("1 FRONT_RIGHT -> %s\n", name_or_black(1));
+    log("2 FRONT_LEFT  -> %s\n", name_or_black(0));
+    log("3 BACK        -> %s\n", name_or_black(-1));
+    log("4 BACK_LEFT   -> %s\n", name_or_black(2));
+    log("5 BACK_RIGHT  -> %s\n", name_or_black(3));
+    log("==============================================================\n");
     
     // Initialize LiDAR using rig file approach
     uint32_t lidarCount = 0;
@@ -819,9 +842,23 @@ public:
     memcpy(m_camera2lidar.ptr<float>(), camera2lidar_data.data(), camera2lidar_data.size() * sizeof(float));
     memcpy(m_cameraIntrinsics.ptr<float>(), camera_intrinsics_data.data(), camera_intrinsics_data.size() * sizeof(float));
     memcpy(m_lidar2image.ptr<float>(), lidar2image_data.data(), lidar2image_data.size() * sizeof(float));
-    memcpy(m_imgAugMatrix.ptr<float>(), img_aug_matrix_data.data(), img_aug_matrix_data.size() * sizeof(float));
+    // Follow CUDA-BEVFusion: img_aug_matrix performs model-space resize 1600x900 -> 704x256
+    // Scale: sx = 704/1600, sy = 256/900. Do not apply in GUI projections.
+    {
+        std::vector<float> aug_data(img_aug_matrix_data.size(), 0.0f);
+        const float sx = 704.0f / 1600.0f;
+        const float sy = 256.0f / 900.0f;
+        for (int i = 0; i < MAX_CAMERAS; ++i) {
+            const int base = i * 16;
+            aug_data[base + 0]  = sx;   // (0,0)
+            aug_data[base + 5]  = sy;   // (1,1)
+            aug_data[base + 10] = 1.0f; // (2,2)
+            aug_data[base + 15] = 1.0f; // (3,3)
+        }
+        memcpy(m_imgAugMatrix.ptr<float>(), aug_data.data(), aug_data.size() * sizeof(float));
+    }
     
-    log("Identity transformation matrices initialized as fallback\n");
+    log("Transformation matrices initialized (img_aug set to 704x256 scale for model)\n");
     }
     
     // Note: saveDetectionResults function removed as requested - visualization is handled in GUI
@@ -852,45 +889,40 @@ public:
     dwImageCUDA* cameraImgCUDA;
     CHECK_DW_ERROR(dwImage_getCUDA(&cameraImgCUDA, rgbaImage));
     
-    // Optimized GPU pipeline: Resize RGBA → Convert to RGB
+    // CRITICAL FIX: Use proper DriveWorks image transformation (following NVIDIA approach)
     if (cameraImgCUDA->prop.width != imgCUDA->prop.width || cameraImgCUDA->prop.height != imgCUDA->prop.height) {
-        // Step 1: Resize RGBA to BEVFusion dimensions (GPU)
+        // Step 1: Resize RGBA to BEVFusion dimensions using DriveWorks API
         CHECK_DW_ERROR(dwImageTransformation_copy(m_cameraRGBAImages[i], rgbaImage, nullptr, nullptr, m_imageTransformer));
         
-        // Step 2: Convert RGBA to RGB for BEVFusion (GPU)
+        // Step 2: Convert RGBA to RGB using DriveWorks API with proper synchronization
         CHECK_DW_ERROR(dwImage_copyConvertAsync(m_cameraRGBImages[i], m_cameraRGBAImages[i], m_cudaStream, m_context));
         
         if (m_enableLogging && m_frameCount % 60 == 0) {
-            log("Camera %zu: Optimized GPU pipeline - Resized %dx%d→%dx%d, RGBA→RGB\n", i, 
+            log("Camera %zu: GPU pipeline - Resized and converted %dx%d→%dx%d\n", i, 
                 cameraImgCUDA->prop.width, cameraImgCUDA->prop.height,
                 imgCUDA->prop.width, imgCUDA->prop.height);
         }
     } else {
-        // Same dimensions, direct RGBA copy and convert to RGB
-        size_t copySize = imgCUDA->pitch[0] * imgCUDA->prop.height;
-        cudaMemcpy(imgCUDA->dptr[0], cameraImgCUDA->dptr[0], copySize, cudaMemcpyDeviceToDevice);
-        
-        // Convert RGBA to RGB for BEVFusion
+        // Same dimensions: copy and convert using DriveWorks APIs
+        // Use dwImageTransformation_copy for same-size copy (following NVIDIA approach)
+        CHECK_DW_ERROR(dwImageTransformation_copy(m_cameraRGBAImages[i], rgbaImage, nullptr, nullptr, m_imageTransformer));
         CHECK_DW_ERROR(dwImage_copyConvertAsync(m_cameraRGBImages[i], m_cameraRGBAImages[i], m_cudaStream, m_context));
         
         if (m_enableLogging && m_frameCount % 60 == 0) {
-            log("Camera %zu: Same dimensions - Direct copy + RGBA→RGB conversion\n", i);
+            log("Camera %zu: Direct copy and convert\n", i);
         }
     }
     } else {
     // Create colored placeholder for this camera
     uint8_t color = (i + 1) * 40;
     cudaMemset(imgCUDA->dptr[0], color, imgCUDA->pitch[0] * imgCUDA->prop.height);
-    if (m_enableLogging && m_frameCount % 60 == 0) {
-    log("Camera %zu: Failed to get image, using colored placeholder\n", i);
-    }
     }
     
-    // Return the frame (following NVIDIA camera sample)
-    dwSensorCamera_returnFrame(&frame);
+    // CRITICAL: Always return the frame (following NVIDIA camera sample)
+    CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
     } else if (status == DW_END_OF_STREAM) {
     // Reset the sensor to support loopback (following NVIDIA camera sample)
-    dwSensor_reset(m_cameras[i].sensor);
+    CHECK_DW_ERROR(dwSensor_reset(m_cameras[i].sensor));
     if (m_enableLogging && m_frameCount % 60 == 0) {
     log("Camera %zu: Video reached end of stream, reset sensor\n", i);
     }
@@ -906,10 +938,18 @@ public:
     }
     }
     } else {
-    // Black image or no camera available
+    // Black image or no camera available - use proper black initialization
     cudaMemset(imgCUDA->dptr[0], 0, imgCUDA->pitch[0] * imgCUDA->prop.height);
+    
+    // Also ensure RGB buffer is black for BEVFusion
+    dwImageCUDA* rgbImgCUDA;
+    CHECK_DW_ERROR(dwImage_getCUDA(&rgbImgCUDA, m_cameraRGBImages[i]));
+    cudaMemset(rgbImgCUDA->dptr[0], 0, rgbImgCUDA->pitch[0] * rgbImgCUDA->prop.height);
     }
     }
+    
+    // CRITICAL: Synchronize CUDA stream after all operations (following NVIDIA pattern)
+    cudaStreamSynchronize(m_cudaStream);
     
     if (m_enableLogging && m_frameCount % 30 == 0) {
     log("Camera images updated\n");
@@ -1155,10 +1195,13 @@ public:
     }
     };
     
-          // Render boxes by class with different colors
-      renderBoxGroup(vehicleBoxes, {1.0f, 0.0f, 0.0f, 1.0f}, "vehicle"); // Red for vehicles
-      renderBoxGroup(pedestrianBoxes, {0.0f, 1.0f, 0.0f, 1.0f}, "pedestrian"); // Green for pedestrians
-      renderBoxGroup(cyclistBoxes, {0.0f, 0.0f, 1.0f, 1.0f}, "cyclist"); // Blue for cyclists
+      // Render boxes by class with nuScenes colors (CUDA-BEVFusion defaults)
+      // car (vehicleBoxes grouped include id=0): RGB(255,158,0)
+      renderBoxGroup(vehicleBoxes, {255.0f/255.0f, 158.0f/255.0f, 0.0f/255.0f, 1.0f}, "vehicle");
+      // pedestrian: RGB(0,0,230)
+      renderBoxGroup(pedestrianBoxes, {0.0f/255.0f, 0.0f/255.0f, 230.0f/255.0f, 1.0f}, "pedestrian");
+      // cyclist (bicycle proxy): RGB(220,20,60)
+      renderBoxGroup(cyclistBoxes, {220.0f/255.0f, 20.0f/255.0f, 60.0f/255.0f, 1.0f}, "cyclist");
     } // End of renderBoundingBoxes()
     
     // Always render ego vehicle (independent of detections)
@@ -1458,6 +1501,9 @@ public:
     CHECK_DW_ERROR(dwImageTransformation_initialize(&m_imageTransformer, imgTransformParams, m_context));
     CHECK_DW_ERROR(dwImageTransformation_setCUDAStream(m_cudaStream, m_imageTransformer));
     log("Image transformation initialized\n");
+    if (m_enableLogging) {
+    log("ImageTransformation ready: default params, stream set.\n");
+    }
     
     // Initialize screenshot helper
     log("Initializing screenshot helper...\n");
@@ -1484,6 +1530,9 @@ public:
     cudaProps.width = imageProperties.width;
     cudaProps.height = imageProperties.height;
     CHECK_DW_ERROR(dwImage_create(&m_cameraRGBAImages[i], cudaProps, m_context));
+    if (m_enableLogging) {
+    log("Camera %d RGBA buffer created: %dx%d\n", i, (int)cudaProps.width, (int)cudaProps.height);
+    }
     
     log("Camera %d streamer initialized with %dx%d\n", i, imageProperties.width, imageProperties.height);
     } else {
@@ -1495,6 +1544,9 @@ public:
     imageProps.height = BEVFUSION_IMAGE_HEIGHT;
     
     CHECK_DW_ERROR(dwImage_create(&m_cameraRGBAImages[i], imageProps, m_context));
+    if (m_enableLogging) {
+    log("Camera %d RGBA buffer created (black): %dx%d\n", i, (int)imageProps.width, (int)imageProps.height);
+    }
     CHECK_DW_ERROR(dwImageStreamerGL_initialize(&m_streamerToGL[i], &imageProps, DW_IMAGE_GL, m_context));
     
     log("Camera %d (black image) streamer initialized with %dx%d\n", i, imageProps.width, imageProps.height);
@@ -1512,15 +1564,45 @@ public:
     imageProps.height = BEVFUSION_IMAGE_HEIGHT;
     log("Camera %d: Using BEVFusion dimensions %dx%d (BEVFusion mode)\n", i, imageProps.width, imageProps.height);
     
+    // Check if this is a black image camera
+    bool isBlackImageCamera = (i < m_cameras.size()) ? m_cameras[i].isBlackImage : true;
+    
     CHECK_DW_ERROR(dwImage_create(&m_cameraRGBAImages[i], imageProps, m_context));
+    if (m_enableLogging) {
+    log("Camera %d RGBA buffer created: %dx%d (black=%s)\n", i, (int)imageProps.width, (int)imageProps.height,
+        isBlackImageCamera ? "true" : "false");
+    }
     
     // Create RGB image for BEVFusion processing
     dwImageProperties rgbProps = imageProps;
     rgbProps.format = DW_IMAGE_FORMAT_RGB_UINT8;
     CHECK_DW_ERROR(dwImage_create(&m_cameraRGBImages[i], rgbProps, m_context));
+    if (m_enableLogging) {
+    log("Camera %d RGB buffer created: %dx%d\n", i, (int)rgbProps.width, (int)rgbProps.height);
+    }
     
     // Initialize GL streamer
     CHECK_DW_ERROR(dwImageStreamerGL_initialize(&m_streamerToGL[i], &imageProps, DW_IMAGE_GL, m_context));
+    
+    // CRITICAL FIX: Initialize black image buffers properly for black image cameras
+    if (isBlackImageCamera) {
+        // Fill RGBA buffer with black pixels
+        dwImageCUDA* rgbaImgCUDA;
+        CHECK_DW_ERROR(dwImage_getCUDA(&rgbaImgCUDA, m_cameraRGBAImages[i]));
+        cudaMemset(rgbaImgCUDA->dptr[0], 0, rgbaImgCUDA->pitch[0] * rgbaImgCUDA->prop.height);
+        
+        // Fill RGB buffer with black pixels  
+        dwImageCUDA* rgbImgCUDA;
+        CHECK_DW_ERROR(dwImage_getCUDA(&rgbImgCUDA, m_cameraRGBImages[i]));
+        cudaMemset(rgbImgCUDA->dptr[0], 0, rgbImgCUDA->pitch[0] * rgbImgCUDA->prop.height);
+        
+        // Synchronize to ensure initialization is complete
+        cudaStreamSynchronize(m_cudaStream);
+        
+        if (m_enableLogging) {
+            log("Camera %d: Initialized black image buffers\n", i);
+        }
+    }
     
     log("Camera %d streamer initialized with %dx%d\n", i, imageProps.width, imageProps.height);
     }
@@ -1590,6 +1672,11 @@ public:
     log("=== Starting sensor data processing for frame %d ===\n", m_frameCount + 1);
     }
     
+    // Clear previous camera projections at start of new frame processing
+    for (auto& cameraProj : m_cameraProjections) {
+        cameraProj.clear();
+    }
+    
     std::vector<unsigned char*> cameraImages(MAX_CAMERAS, nullptr);
     nv::Tensor lidarPoints;
     
@@ -1610,27 +1697,22 @@ public:
         tempBlackImages.push_back(std::move(blackImage));
     }
     
-    // BEVFusion index 0 (FRONT) - black image
+    // BEVFusion camera mapping based on your 4camera_1lidar.json:
+    // Your rig: 0=front_left, 1=front_right, 2=back_left, 3=back_right
+    
+    // BEVFusion index 0 (FRONT) - black image (not in your rig)
     cameraImages[0] = tempBlackImages[0].get();
     
-    // BEVFusion index 1 (FRONT_RIGHT) - rig camera 0
-    cameraImages[1] = (m_cameras.size() > 0 && !m_cameras[0].isBlackImage) ? 
-                      getCameraFrame(0) : tempBlackImages[1].get();
-    
-    // BEVFusion index 2 (FRONT_LEFT) - rig camera 3
-    cameraImages[2] = (m_cameras.size() > 3 && !m_cameras[3].isBlackImage) ? 
-                      getCameraFrame(3) : tempBlackImages[2].get();
-    
-    // BEVFusion index 3 (BACK) - black image
+    // BEVFusion index 1 (FRONT_RIGHT) <- rig 1 (front_right)
+    cameraImages[1] = (m_cameras.size() > 1 && !m_cameras[1].isBlackImage) ? getCameraFrame(1) : tempBlackImages[1].get();
+    // BEVFusion index 2 (FRONT_LEFT)  <- rig 0 (front_left)
+    cameraImages[2] = (m_cameras.size() > 0 && !m_cameras[0].isBlackImage) ? getCameraFrame(0) : tempBlackImages[2].get();
+    // BEVFusion index 3 (BACK) <- black
     cameraImages[3] = tempBlackImages[3].get();
-    
-    // BEVFusion index 4 (BACK_LEFT) - rig camera 2
-    cameraImages[4] = (m_cameras.size() > 2 && !m_cameras[2].isBlackImage) ? 
-                      getCameraFrame(2) : tempBlackImages[4].get();
-    
-    // BEVFusion index 5 (BACK_RIGHT) - rig camera 1
-    cameraImages[5] = (m_cameras.size() > 1 && !m_cameras[1].isBlackImage) ? 
-                      getCameraFrame(1) : tempBlackImages[5].get();
+    // BEVFusion index 4 (BACK_LEFT)   <- rig 2 (back_left)
+    cameraImages[4] = (m_cameras.size() > 2 && !m_cameras[2].isBlackImage) ? getCameraFrame(2) : tempBlackImages[4].get();
+    // BEVFusion index 5 (BACK_RIGHT)  <- rig 3 (back_right)
+    cameraImages[5] = (m_cameras.size() > 3 && !m_cameras[3].isBlackImage) ? getCameraFrame(3) : tempBlackImages[5].get();
     
     // Get LiDAR data
     if (m_enableLogging) {
@@ -1658,6 +1740,17 @@ public:
     // Run BEVFusion inference
     if (m_enableLogging) {
     log("Running BEVFusion inference...\n");
+    for (size_t ci = 0; ci < MAX_CAMERAS; ++ci) {
+    dwImageCUDA* dbgRGBA = nullptr;
+    dwImageCUDA* dbgRGB = nullptr;
+    dwImage_getCUDA(&dbgRGBA, m_cameraRGBAImages[ci]);
+    dwImage_getCUDA(&dbgRGB, m_cameraRGBImages[ci]);
+    if (dbgRGBA && dbgRGB) {
+    log("Cam%zu buffers: RGBA %dx%d pitch=%d | RGB %dx%d pitch=%d\n", ci,
+        dbgRGBA->prop.width, dbgRGBA->prop.height, dbgRGBA->pitch[0],
+        dbgRGB->prop.width, dbgRGB->prop.height, dbgRGB->pitch[0]);
+    }
+    }
     }
     
     m_timer.start();
@@ -1668,6 +1761,9 @@ public:
     logError("Camera %zu image is null, cannot proceed with inference\n", i);
     return;
     }
+    }
+    if (m_enableLogging) {
+    log("All %d camera inputs present. Lidar points: %ld. Proceeding.\n", MAX_CAMERAS, lidarPoints.size(0));
     }
     
         if (m_enableLogging) {
@@ -1688,13 +1784,16 @@ public:
     // Store bounding boxes for visualization
     m_lastBboxes = bboxes;
     
-    // Project bounding boxes to cameras immediately after detection
+    // RAW MODEL VALUES OUTPUT (following NVIDIA BEVFusion style)
     if (m_enableLogging && !bboxes.empty()) {
-        log("Projecting %zu bounding boxes to cameras...\n", bboxes.size());
+        log("RAW MODEL VALUES: bboxes.size()=%zu\n", bboxes.size());
         for (size_t i = 0; i < bboxes.size(); i++) {
-            log("Bbox %zu: pos=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f) score=%.3f id=%d\n", 
-                i, bboxes[i].position.x, bboxes[i].position.y, bboxes[i].position.z,
-                bboxes[i].size.w, bboxes[i].size.l, bboxes[i].size.h, bboxes[i].score, bboxes[i].id);
+            const auto& bbox = bboxes[i];
+            log("RAW MODEL VALUES [%zu]: pos.x=%.6f, pos.y=%.6f, pos.z=%.6f, size.w=%.6f, size.l=%.6f, size.h=%.6f, z_rotation=%.6f, score=%.6f, id=%d, vel.vx=%.6f, vel.vy=%.6f\n", 
+                i, bbox.position.x, bbox.position.y, bbox.position.z, 
+                bbox.size.w, bbox.size.l, bbox.size.h, 
+                bbox.z_rotation, bbox.score, bbox.id, 
+                bbox.velocity.vx, bbox.velocity.vy);
         }
     }
     
@@ -1730,7 +1829,7 @@ public:
     unsigned char* getCameraFrame(size_t cameraIndex)
     {
     if (cameraIndex >= m_cameras.size()) {
-    return nullptr;
+        return nullptr;
     }
     
     CameraData& camera = m_cameras[cameraIndex];
@@ -1740,19 +1839,9 @@ public:
     return camera.imageData;
     }
     
-    // Read camera frame
-    dwCameraFrameHandle_t frame;
-    dwStatus status = dwSensorCamera_readFrame(&frame, 100000, camera.sensor);
-    
-    if (status != DW_SUCCESS) {
-    logWarn("Failed to read camera frame from camera %zu\n", cameraIndex);
-    return camera.imageData; // Return black image as fallback
-    }
-    
-    // Use optimized GPU pipeline - RGB image is already processed in updateCameraImages()
-    // Get RGB image data directly from GPU
-    dwImageCUDA* rgbImgCUDA;
-    CHECK_DW_ERROR(dwImage_getCUDA(&rgbImgCUDA, m_cameraRGBImages[cameraIndex]));
+    // CRITICAL FIX: Use proper DriveWorks streaming pattern (following NVIDIA camera sample)
+    // Don't read frames here - frames are already read in updateCameraImages()
+    // Just return the processed CPU data using proper streaming
     
     // Allocate camera image data if needed
     if (!camera.imageData) {
@@ -1760,12 +1849,47 @@ public:
     camera.imageData = new unsigned char[imageSize];
     }
     
-    // Copy RGB data from GPU to CPU (much faster than manual pixel conversion)
-    size_t copySize = BEVFUSION_IMAGE_WIDTH * BEVFUSION_IMAGE_HEIGHT * 3;
-    cudaMemcpy(camera.imageData, rgbImgCUDA->dptr[0], copySize, cudaMemcpyDeviceToHost);
-    
-    // Return frame
-    CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
+    // Use proper DriveWorks streaming pattern to get CPU data (following NVIDIA approach)
+    if (camera.streamerToCPU != DW_NULL_HANDLE) {
+        // Stream RGB image to CPU domain (following NVIDIA camera sample)
+        dwStatus streamStatus = dwImageStreamer_producerSend(m_cameraRGBImages[cameraIndex], camera.streamerToCPU);
+        if (streamStatus == DW_SUCCESS) {
+            // Receive streamed image as CPU handle
+            dwImageHandle_t frameCPU;
+            dwStatus receiveStatus = dwImageStreamer_consumerReceive(&frameCPU, 33000, camera.streamerToCPU);
+            if (receiveStatus == DW_SUCCESS) {
+                // Get CPU image data (following NVIDIA camera sample)
+                dwImageCPU* imgCPU;
+                dwStatus getCPUStatus = dwImage_getCPU(&imgCPU, frameCPU);
+                if (getCPUStatus == DW_SUCCESS && imgCPU->data[0]) {
+                    // Copy CPU data safely (following NVIDIA approach)
+                    size_t rowSize = BEVFUSION_IMAGE_WIDTH * 3; // RGB: 3 bytes per pixel
+                    for (uint32_t row = 0; row < BEVFUSION_IMAGE_HEIGHT; row++) {
+                        unsigned char* srcRow = static_cast<unsigned char*>(imgCPU->data[0]) + (row * imgCPU->pitch[0]);
+                        unsigned char* dstRow = camera.imageData + (row * rowSize);
+                        memcpy(dstRow, srcRow, rowSize);
+                    }
+                    
+                    if (m_enableLogging && m_frameCount % 30 == 0) {
+                        log("getCameraFrame(%zu): CPU streaming successful\n", cameraIndex);
+                    }
+                }
+                
+                // Return CPU image (following NVIDIA camera sample)
+                dwImageStreamer_consumerReturn(&frameCPU, camera.streamerToCPU);
+            }
+            
+            // Return to producer (following NVIDIA camera sample)
+            dwImageStreamer_producerReturn(nullptr, 33000, camera.streamerToCPU);
+        }
+    } else {
+        // Fallback: fill with black data
+        size_t imageSize = BEVFUSION_IMAGE_WIDTH * BEVFUSION_IMAGE_HEIGHT * 3;
+        memset(camera.imageData, 0, imageSize);
+        if (m_enableLogging && m_frameCount % 30 == 0) {
+            logWarn("getCameraFrame(%zu): No CPU streamer available, using black fallback\n", cameraIndex);
+        }
+    }
     
     return camera.imageData;
     }
@@ -2051,13 +2175,13 @@ public:
     
     // Project 3D bounding boxes to 2D camera coordinates using BEVFusion's approach
     void projectBoundingBoxesToCamera(int cameraIndex, const std::vector<bevfusion::head::transbbox::BoundingBox>& bboxes) {
-        if (m_enableLogging && m_frameCount % 60 == 0 && cameraIndex == 0) {
-            log("projectBoundingBoxesToCamera: camera=%d, bboxes=%zu\n", cameraIndex, bboxes.size());
+        if (m_enableLogging) {
+            log("PROJECTION DEBUG: camera=%d, bboxes=%zu\n", cameraIndex, bboxes.size());
         }
         
         if (bboxes.empty() || cameraIndex >= MAX_CAMERAS) {
-            if (m_enableLogging && m_frameCount % 60 == 0 && cameraIndex == 0) {
-                log("Skipping projection: bboxes.empty()=%s, cameraIndex=%d >= MAX_CAMERAS=%d\n", 
+            if (m_enableLogging) {
+                log("PROJECTION DEBUG: Skipping projection: bboxes.empty()=%s, cameraIndex=%d >= MAX_CAMERAS=%d\n", 
                     bboxes.empty() ? "true" : "false", cameraIndex, MAX_CAMERAS);
             }
             return;
@@ -2065,14 +2189,14 @@ public:
         
         // Check if lidar2image tensor is loaded (it should be loaded by loadTransformationMatrices)
         if (m_lidar2image.empty()) {
-            if (m_enableLogging && m_frameCount % 60 == 0 && cameraIndex == 0) {
-                log("ERROR: lidar2image tensor not loaded, skipping camera projection\n");
+            if (m_enableLogging) {
+                log("PROJECTION DEBUG: ERROR: lidar2image tensor not loaded, skipping camera projection\n");
             }
             return;
         }
         
-        if (m_enableLogging && m_frameCount % 60 == 0 && cameraIndex == 0) {
-            log("lidar2image tensor loaded: shape=[%ld, %ld, %ld, %ld]\n", 
+        if (m_enableLogging && cameraIndex == 0) {
+            log("PROJECTION DEBUG: lidar2image tensor loaded: shape=[%ld, %ld, %ld, %ld]\n", 
                 m_lidar2image.shape[0], m_lidar2image.shape[1], m_lidar2image.shape[2], m_lidar2image.shape[3]);
         }
         
@@ -2146,8 +2270,8 @@ public:
             }
             
             if (!validProjection || projectedCorners.size() != 8) {
-                if (m_enableLogging && m_frameCount % 60 == 0 && cameraIndex == 0) {
-                    log("Camera %d: Invalid projection for bbox %zu: valid=%s, corners=%zu\n", 
+                if (m_enableLogging) {
+                    log("PROJECTION DEBUG: Camera %d: Invalid projection for bbox %zu: valid=%s, corners=%zu\n", 
                         cameraIndex, i, validProjection ? "true" : "false", projectedCorners.size());
                 }
                 continue;
@@ -2156,8 +2280,8 @@ public:
             // Store projected bounding box for rendering
             storeCameraProjection(cameraIndex, i, projectedCorners, bbox);
             
-            if (m_enableLogging && m_frameCount % 60 == 0 && i < 3) {
-                log("Camera %d: Projected bbox %zu (%.1f,%.1f,%.1f) score=%.2f, 8 corners valid\n",
+            if (m_enableLogging) {
+                log("PROJECTION DEBUG: Camera %d: Projected bbox %zu (%.1f,%.1f,%.1f) score=%.2f, 8 corners valid, STORED\n",
                     cameraIndex, i, bbox.position.x, bbox.position.y, bbox.position.z, bbox.score);
             }
         }
@@ -2190,15 +2314,46 @@ public:
         projection.score = bbox.score;
         projection.label = bbox.id;
         
-        // Set color based on object class (matching 3D rendering)
-        if (bbox.id == 0) { // Vehicle
-            projection.color = {1.0f, 0.0f, 0.0f, 1.0f}; // Red
-        } else if (bbox.id == 1) { // Pedestrian
-            projection.color = {0.0f, 1.0f, 0.0f, 1.0f}; // Green
-        } else if (bbox.id == 2) { // Cyclist
-            projection.color = {0.0f, 0.0f, 1.0f, 1.0f}; // Blue
-        } else {
-            projection.color = {1.0f, 1.0f, 0.0f, 1.0f}; // Yellow for unknown
+        if (m_enableLogging) {
+            log("PROJECTION DEBUG: storeCameraProjection: camera=%d, bbox=%d, corners=%zu, score=%.2f\n", 
+                cameraIndex, bboxIndex, corners.size(), bbox.score);
+        }
+        
+        // Set color based on object class using CUDA-BEVFusion nuScenes palette
+        switch (bbox.id) {
+            case 0: /* car */
+                projection.color = {255.0f/255.0f, 158.0f/255.0f, 0.0f/255.0f, 1.0f};
+                break;
+            case 1: /* pedestrian */
+                projection.color = {0.0f/255.0f, 0.0f/255.0f, 230.0f/255.0f, 1.0f};
+                break;
+            case 2: /* cyclist (bicycle) */
+                projection.color = {220.0f/255.0f, 20.0f/255.0f, 60.0f/255.0f, 1.0f};
+                break;
+            case 3: /* motorcycle */
+                projection.color = {255.0f/255.0f, 61.0f/255.0f, 99.0f/255.0f, 1.0f};
+                break;
+            case 4: /* truck */
+                projection.color = {255.0f/255.0f, 99.0f/255.0f, 71.0f/255.0f, 1.0f};
+                break;
+            case 5: /* bus */
+                projection.color = {255.0f/255.0f, 69.0f/255.0f, 0.0f/255.0f, 1.0f};
+                break;
+            case 6: /* trailer */
+                projection.color = {255.0f/255.0f, 140.0f/255.0f, 0.0f/255.0f, 1.0f};
+                break;
+            case 7: /* construction_vehicle */
+                projection.color = {233.0f/255.0f, 150.0f/255.0f, 70.0f/255.0f, 1.0f};
+                break;
+            case 8: /* barrier */
+                projection.color = {112.0f/255.0f, 128.0f/255.0f, 144.0f/255.0f, 1.0f};
+                break;
+            case 9: /* traffic_cone */
+                projection.color = {47.0f/255.0f, 79.0f/255.0f, 79.0f/255.0f, 1.0f};
+                break;
+            default: /* unknown */
+                projection.color = {1.0f, 1.0f, 0.0f, 1.0f};
+                break;
         }
         
         m_cameraProjections[cameraIndex].push_back(projection);
@@ -2206,7 +2361,20 @@ public:
     
     // Render projected bounding boxes on camera feed using DriveWorks 2D rendering
     void renderCameraBoundingBoxes(int cameraIndex, const dwVector2f& imageRange) {
+        if (m_enableLogging) {
+            log("RENDER DEBUG: renderCameraBoundingBoxes: camera=%d, projections_size=%zu, has_projections=%s\n", 
+                cameraIndex, 
+                (cameraIndex < m_cameraProjections.size()) ? m_cameraProjections[cameraIndex].size() : 0,
+                (cameraIndex < m_cameraProjections.size() && !m_cameraProjections[cameraIndex].empty()) ? "true" : "false");
+        }
+        
         if (cameraIndex >= m_cameraProjections.size() || m_cameraProjections[cameraIndex].empty()) {
+            if (m_enableLogging) {
+                log("RENDER DEBUG: Camera %d: No projections to render (size=%zu, empty=%s)\n", 
+                    cameraIndex,
+                    (cameraIndex < m_cameraProjections.size()) ? m_cameraProjections[cameraIndex].size() : 0,
+                    (cameraIndex < m_cameraProjections.size()) ? (m_cameraProjections[cameraIndex].empty() ? "true" : "false") : "out_of_bounds");
+            }
             return;
         }
         
@@ -2287,14 +2455,33 @@ public:
     log("Rendering camera feeds...\n");
     }
     
-    // Clear previous camera projections
-    for (auto& cameraProj : m_cameraProjections) {
-        cameraProj.clear();
-    }
+    // Note: Don't clear camera projections here - they contain current frame's bounding boxes
     
     // BEVFusion order mapping for display
-    // BEVFusion index -> Rig camera index (for display)
-    int rigCameraMapping[MAX_CAMERAS] = {-1, 0, 3, -1, 2, 1}; // -1 means black image
+    // BEVFusion index -> Rig camera index (based on your 4camera_1lidar.json)
+    // Your rig: 0=front_left, 1=front_right, 2=back_left, 3=back_right
+    // BEVFusion: 0=FRONT, 1=FRONT_RIGHT, 2=FRONT_LEFT, 3=BACK, 4=BACK_LEFT, 5=BACK_RIGHT
+    int rigCameraMapping[MAX_CAMERAS] = {-1, 0, 3, -1, 2, 1}; 
+    // -1 = black image (no camera in rig)
+    // BEVFusion FRONT(0) → black image
+    // BEVFusion FRONT_RIGHT(1) → rig camera:front_right(1)  
+    // BEVFusion FRONT_LEFT(2) → rig camera:front_left(0)
+    // BEVFusion BACK(3) → black image
+    // BEVFusion BACK_LEFT(4) → rig camera:back_left(2)
+    // BEVFusion BACK_RIGHT(5) → rig camera:back_right(3)
+    
+    // Friendly camera names for visualization (BEVFusion order)
+    // IMPORTANT: This order must match BEVFusion example and your tensor files
+    // BEVFusion expects: 0=FRONT, 1=FRONT_RIGHT, 2=FRONT_LEFT, 3=BACK, 4=BACK_LEFT, 5=BACK_RIGHT
+    // For 4-camera setup: map your rig cameras to indices 1,2,4,5 and use black images for 0,3
+    static const char* kFriendlyNames[MAX_CAMERAS] = {
+        "FRONT",         // 0 - BEVFusion index 0 (use black image for 4-camera setup)
+        "FRONT_RIGHT",   // 1 - BEVFusion index 1 (your rig camera 1)
+        "FRONT_LEFT",    // 2 - BEVFusion index 2 (your rig camera 0) 
+        "BACK",          // 3 - BEVFusion index 3 (use black image for 4-camera setup)
+        "BACK_LEFT",     // 4 - BEVFusion index 4 (your rig camera 2)
+        "BACK_RIGHT"     // 5 - BEVFusion index 5 (your rig camera 3)
+    };
     
     for (uint32_t i = 0; i < MAX_CAMERAS; i++) {
     try {
@@ -2302,17 +2489,26 @@ public:
     dwRenderEngine_setTile(m_tileCameras[i], m_renderEngine);
     dwRenderEngine_resetTile(m_renderEngine);
     
-    // Project 3D bounding boxes to 2D camera coordinates
-    if (m_enableLogging && m_frameCount % 60 == 0 && i == 0) {
-        log("About to call projectBoundingBoxesToCamera for camera %d with %zu bboxes\n", i, m_lastBboxes.size());
-    }
-    projectBoundingBoxesToCamera(i, m_lastBboxes);
-    
     // Get the rig camera index for this BEVFusion index
     int rigCameraIndex = rigCameraMapping[i];
     
+    // Project 3D bounding boxes to 2D camera coordinates (use rig camera index for consistency)
+    if (m_enableLogging && m_frameCount % 60 == 0 && i == 0) {
+        log("About to call projectBoundingBoxesToCamera for BEVFusion camera %d (rig camera %d) with %zu bboxes\n", i, rigCameraIndex, m_lastBboxes.size());
+    }
+    
+    // CRITICAL FIX: Project to ALL cameras (including black image cameras)
+    // Use BEVFusion camera index for projection (consistent with transformation matrices)
+    projectBoundingBoxesToCamera(i, m_lastBboxes);
+    
     // Stream camera image to GL (use rig camera index for display)
     if (rigCameraIndex >= 0 && rigCameraIndex < static_cast<int>(m_cameras.size())) {
+        if (m_enableLogging && m_frameCount % 60 == 0) {
+            const char* rigName = m_cameras[rigCameraIndex].name.c_str();
+            log("GUI tile %u label=%s -> rig[%d]=%s (actual physical position)\n", i,
+                (i < MAX_CAMERAS ? kFriendlyNames[i] : "unknown"),
+                rigCameraIndex, rigName);
+        }
         // Convert RGB to RGBA for display (GPU operation)
         CHECK_DW_ERROR(dwImage_copyConvertAsync(m_cameraRGBAImages[rigCameraIndex], m_cameraRGBImages[rigCameraIndex], m_cudaStream, m_context));
         
@@ -2333,7 +2529,7 @@ public:
         CHECK_DW_ERROR(dwRenderEngine_setCoordinateRange2D(range, m_renderEngine));
         CHECK_DW_ERROR(dwRenderEngine_renderImage2D(imageGL, {0, 0, range.x, range.y}, m_renderEngine));
         
-        // Render projected bounding boxes on camera feed
+        // Render projected bounding boxes on camera feed (use BEVFusion index for consistency)
         renderCameraBoundingBoxes(i, range);
         
         // Return GL image
@@ -2342,6 +2538,10 @@ public:
     } else {
         // For missing cameras (indices 0 and 3), show black image
         // Use BEVFusion dimensions since all streamers now use consistent dimensions
+        if (m_enableLogging && m_frameCount % 60 == 0) {
+            log("GUI tile %u label=%s -> BLACK IMAGE\n", i,
+                (i < MAX_CAMERAS ? kFriendlyNames[i] : "unknown"));
+        }
         dwImageProperties blackProps = {};
         blackProps.type = DW_IMAGE_CUDA;
         blackProps.format = DW_IMAGE_FORMAT_RGBA_UINT8;
@@ -2374,6 +2574,9 @@ public:
         CHECK_DW_ERROR(dwRenderEngine_setCoordinateRange2D(range, m_renderEngine));
         CHECK_DW_ERROR(dwRenderEngine_renderImage2D(imageGL, {0, 0, range.x, range.y}, m_renderEngine));
         
+        // CRITICAL FIX: Render projected bounding boxes on black image cameras too
+        renderCameraBoundingBoxes(i, range);
+        
         // Return GL image
         CHECK_DW_ERROR(dwImageStreamerGL_consumerReturn(&frameGL, m_streamerToGL[i]));
         CHECK_DW_ERROR(dwImageStreamerGL_producerReturn(nullptr, 33000, m_streamerToGL[i]));
@@ -2386,18 +2589,6 @@ public:
     dwRenderEngine_setColor({1.0f, 1.0f, 1.0f, 1.0f}, m_renderEngine);
     dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_12, m_renderEngine);
     
-    // Friendly camera names for visualization (BEVFusion order)
-    // IMPORTANT: This order must match BEVFusion example and your tensor files
-    // BEVFusion expects: 0=FRONT, 1=FRONT_RIGHT, 2=FRONT_LEFT, 3=BACK, 4=BACK_LEFT, 5=BACK_RIGHT
-    // For 4-camera setup: map your rig cameras to indices 1,2,4,5 and use black images for 0,3
-    static const char* kFriendlyNames[MAX_CAMERAS] = {
-        "FRONT",         // 0 - BEVFusion index 0 (use black image for 4-camera setup)
-        "FRONT_RIGHT",   // 1 - BEVFusion index 1 (your rig camera 0)
-        "FRONT_LEFT",    // 2 - BEVFusion index 2 (your rig camera 3) 
-        "BACK",          // 3 - BEVFusion index 3 (use black image for 4-camera setup)
-        "BACK_LEFT",     // 4 - BEVFusion index 4 (your rig camera 2)
-        "BACK_RIGHT"     // 5 - BEVFusion index 5 (your rig camera 1)
-    };
     std::string cameraLabel;
     const char* friendly = (i < MAX_CAMERAS) ? kFriendlyNames[i] : "unknown";
     if (i < m_cameras.size()) {

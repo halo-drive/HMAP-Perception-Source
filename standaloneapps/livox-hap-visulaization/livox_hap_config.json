@@ -1,0 +1,28 @@
+{
+    "master_sdk": true,
+    "lidar_log_enable": true,
+    "lidar_log_cache_size_MB": 100,
+    "lidar_log_path": "/usr/local/driveworks/samples/src/sensors/lidar/lidar_livox_hap_replay",
+    
+    "HAP": {
+      "lidar_net_info": {
+        "cmd_data_port": 56000,
+        "push_msg_port": 0,
+        "point_data_port": 57000,
+        "imu_data_port": 58000,
+        "log_data_port": 59000
+      },
+      "host_net_info": [
+        {
+          "lidar_ip": ["192.168.1.203"],
+          "host_ip": "192.168.1.101",
+          "multicast_ip": "224.1.1.5",
+          "cmd_data_port": 56000,
+          "push_msg_port": 0,
+          "point_data_port": 57000,
+          "imu_data_port": 58000,
+          "log_data_port": 59000
+        }
+      ]
+    }
+} 
