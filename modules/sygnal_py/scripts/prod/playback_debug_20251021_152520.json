@@ -1,0 +1,37 @@
+{
+  "session_summary": {
+    "total_laps": 1,
+    "trajectory_file": "odometry_trajectory_20251021_152131.json",
+    "total_distance_target_m": 106.99965088628264,
+    "brake_start_distance_m": 8.0
+  },
+  "laps": [
+    {
+      "session_id": "lap_1_20251021_152520",
+      "start_timestamp": 1761056720.6649935,
+      "end_timestamp": 1761056813.7145085,
+      "trajectory_file": "odometry_trajectory_20251021_152131.json",
+      "target_distance_m": 106.99965088628264,
+      "actual_distance_m": 110.04217950213258,
+      "execution_time_s": 93.04951500892639,
+      "lap_number": 1,
+      "total_steering_commands": 478,
+      "total_brake_commands": 96,
+      "brake_initiated_at_m": 99.01831148399224,
+      "brake_duration_s": 8.49716830253601,
+      "mean_angle_error_deg": 159.1761506276151,
+      "max_angle_error_deg": 689.7,
+      "mean_distance_error_m": 0.09381986409096374,
+      "max_distance_error_m": 0.28847834509254255,
+      "rms_position_error_m": 5.9722784084842795,
+      "final_position_xy": [
+        2.6012423756826584,
+        7.676447042880477
+      ],
+      "loop_closure_error_m": 8.105202101070372,
+      "sensor_dropout_events": 0,
+      "control_failure_events": 0,
+      "timing_violations": 0
+    }
+  ]
+}
