@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
-NovAtel live GPS recorder/follower (print-only guidance).
+NovAtel live GPS recorder/follower (print-only guidance) - OPTIMIZED VERSION
+
+Features:
+  - Automatic loop closure detection
+  - Optimized windowed search for large paths
+  - Circular path handling with wraparound
+  - Smart initial localization
 
 Deps:
   pip install pyserial novatel_edie
 
 Usage:
-  # 1) RECORD a loop/path
-  python gps_path_follow.py record --serial /dev/ttyUSB0 --baud 115200 --out loop_ref.jsonl
+  # 1) RECORD a loop/path (auto-stops when loop closes)
+  python main_optimized.py record --serial /dev/ttyUSB0 --baud 115200 --out loop_ref.jsonl
 
   # 2) FOLLOW the saved path
-  python gps_path_follow.py follow --serial /dev/ttyUSB0 --baud 115200 --ref loop_ref.jsonl
+  python main_optimized.py follow --serial /dev/ttyUSB0 --baud 115200 --ref loop_ref.jsonl
 """
 
 import argparse
@@ -159,7 +165,143 @@ class NovAtelStream:
                 t)
 
 # -----------------------
-# Record mode
+# Loop Closure Detector
+# -----------------------
+class LoopClosureDetector:
+    """Detects when a circular path returns to its starting point."""
+    
+    def __init__(self, closure_distance_m=10.0, min_points=20):
+        """
+        Args:
+            closure_distance_m: Distance to start point to trigger closure (meters)
+            min_points: Minimum number of points before checking for closure
+        """
+        self.start_lat = None
+        self.start_lon = None
+        self.closure_distance = closure_distance_m
+        self.min_points = min_points
+        self.point_count = 0
+        self.closure_detected = False
+        
+    def add_start_point(self, lat, lon):
+        """Record the starting position."""
+        self.start_lat = lat
+        self.start_lon = lon
+        self.point_count = 1
+        print(f"[loop] Starting position: lat={lat:.7f}, lon={lon:.7f}")
+        print(f"[loop] Will auto-close when within {self.closure_distance}m of start (after >{self.min_points} points)")
+    
+    def check_closure(self, lat, lon):
+        """
+        Check if current position closes the loop.
+        Returns True if loop is closed.
+        """
+        if self.closure_detected:
+            return True
+            
+        self.point_count += 1
+        
+        # Don't check until we have minimum points (avoid false trigger at start)
+        if self.point_count < self.min_points:
+            return False
+        
+        # Calculate distance to start
+        dist_to_start = haversine_m(self.start_lat, self.start_lon, lat, lon)
+        
+        # Check if we're back at start
+        if dist_to_start <= self.closure_distance:
+            self.closure_detected = True
+            print(f"\n{'='*60}")
+            print(f"[loop] ✓ LOOP CLOSED! Distance to start: {dist_to_start:.1f}m")
+            print(f"[loop] Total points recorded: {self.point_count}")
+            print(f"{'='*60}\n")
+            return True
+        
+        # Periodically show distance to start
+        if self.point_count % 50 == 0:
+            print(f"[loop] Progress: {self.point_count} points | Distance to start: {dist_to_start:.1f}m")
+        
+        return False
+
+# -----------------------
+# Optimized Path Follower
+# -----------------------
+class OptimizedPathFollower:
+    """Efficient path following with windowed search and circular path handling."""
+    
+    def __init__(self, path, search_window=100):
+        """
+        Args:
+            path: List of reference points
+            search_window: Number of points to search around last position
+        """
+        self.path = path
+        self.path_len = len(path)
+        self.search_window = search_window
+        self.last_idx = 0
+        self.initialized = False
+        
+        print(f"[follower] Loaded {self.path_len} reference points")
+        print(f"[follower] Using windowed search (±{search_window} points)")
+        
+    def initial_localization(self, lat, lon):
+        """
+        Perform full search once at startup to find initial position on track.
+        This is O(n) but only happens once.
+        """
+        print(f"[follower] Performing initial localization...")
+        best_i = 0
+        best_d = float("inf")
+        
+        for i, p in enumerate(self.path):
+            d = haversine_m(lat, lon, p["lat"], p["lon"])
+            if d < best_d:
+                best_d = d
+                best_i = i
+        
+        self.last_idx = best_i
+        self.initialized = True
+        print(f"[follower] ✓ Localized at waypoint {best_i}/{self.path_len-1} (distance: {best_d:.1f}m)")
+        return best_i, best_d
+    
+    def find_closest_point(self, lat, lon):
+        """
+        Find closest point using windowed search.
+        For circular paths, handles wraparound at start/end.
+        """
+        # First time: do full search
+        if not self.initialized:
+            return self.initial_localization(lat, lon)
+        
+        # Windowed search around last known position
+        best_i = self.last_idx
+        best_d = haversine_m(lat, lon, 
+                            self.path[best_i]["lat"], 
+                            self.path[best_i]["lon"])
+        
+        # Create search range with wraparound for circular paths
+        search_indices = []
+        
+        for offset in range(-self.search_window, self.search_window + 1):
+            idx = (self.last_idx + offset) % self.path_len  # Circular wraparound
+            search_indices.append(idx)
+        
+        # Search only in window
+        for i in search_indices:
+            d = haversine_m(lat, lon, self.path[i]["lat"], self.path[i]["lon"])
+            if d < best_d:
+                best_d = d
+                best_i = i
+        
+        self.last_idx = best_i
+        return best_i, best_d
+    
+    def get_next_waypoint(self, current_idx):
+        """Get next waypoint with circular wraparound."""
+        return (current_idx + 1) % self.path_len
+
+# -----------------------
+# Record mode with loop closure
 # -----------------------
 def record_loop(args):
     # Open transport
@@ -177,10 +319,17 @@ def record_loop(args):
     out_path = args.out
     f = open(out_path, "w", buffering=1)
     print(f"[record] Writing JSONL to {out_path}")
-    print("Press Ctrl+C to stop recording.")
+    print("Drive in a loop. Recording will auto-stop when loop closes.")
+    print("(Or press Ctrl+C to stop manually)\n")
 
-    min_move_m = args.min_move   # only log if moved at least this much since last point
+    min_move_m = args.min_move
+    loop_detector = LoopClosureDetector(
+        closure_distance_m=args.loop_closure,
+        min_points=args.min_loop_points
+    )
+    
     last_logged = None
+    first_point = True
 
     try:
         while True:
@@ -189,11 +338,16 @@ def record_loop(args):
             fix = nv.current_fix()
             if not fix:
                 continue
+            
             lat, lon, heading, speed, ts = fix
+            
+            # Check if moved enough since last point
             if last_logged:
                 d = haversine_m(lat, lon, last_logged["lat"], last_logged["lon"])
                 if d < min_move_m:
                     continue
+            
+            # Record point
             rec = {
                 "timestamp": ts,
                 "lat": lat,
@@ -203,21 +357,36 @@ def record_loop(args):
             }
             f.write(json.dumps(rec) + "\n")
             last_logged = {"lat": lat, "lon": lon}
+            
+            # First point: record as start
+            if first_point:
+                loop_detector.add_start_point(lat, lon)
+                first_point = False
+            else:
+                # Check for loop closure
+                if loop_detector.check_closure(lat, lon):
+                    print("[record] Loop complete! Stopping recording.")
+                    break
+            
+            # Print progress
             print(f"[record] {datetime.fromtimestamp(ts)} lat={lat:.7f} lon={lon:.7f}"
                   + (f" hdg={heading:.1f}° spd={speed:.2f} m/s" if heading is not None and speed is not None else ""))
+            
     except KeyboardInterrupt:
-        print("\n[record] Stopped.")
+        print("\n[record] Manually stopped.")
     finally:
         f.close()
         try:
             stream.close()
         except Exception:
             pass
+        print(f"[record] Saved to {out_path}")
 
 # -----------------------
-# Follow mode
+# Follow mode with optimized search
 # -----------------------
 def load_path(jsonl_path):
+    """Load path from JSONL file."""
     path = []
     with open(jsonl_path, "r") as f:
         for line in f:
@@ -230,22 +399,15 @@ def load_path(jsonl_path):
                 pass
     return path
 
-def find_closest_index(lat, lon, path):
-    best_i = 0
-    best_d = float("inf")
-    for i, p in enumerate(path):
-        d = haversine_m(lat, lon, p["lat"], p["lon"])
-        if d < best_d:
-            best_d = d; best_i = i
-    return best_i, best_d
-
 def follow_loop(args):
     # Load reference path
     ref = load_path(args.ref)
     if len(ref) < 2:
         print(f"[follow] Reference path too short: {args.ref}")
         sys.exit(1)
-    print(f"[follow] Loaded {len(ref)} reference points from {args.ref}")
+    
+    # Initialize optimized path follower
+    follower = OptimizedPathFollower(ref, search_window=args.search_window)
 
     # Open transport
     if args.serial:
@@ -259,7 +421,8 @@ def follow_loop(args):
         print(f"[follow] Reading from TCP {args.tcp}")
 
     nv = NovAtelStream()
-    print("Press Ctrl+C to stop. Printing guidance...")
+    print("\nWaiting for GPS fix to localize on track...")
+    print("Press Ctrl+C to stop.\n")
 
     # Tuning knobs
     on_path_threshold_m = args.on_path
@@ -275,15 +438,17 @@ def follow_loop(args):
                 continue
             lat, lon, heading, speed, ts = fix
 
-            # 1) Find closest reference point and next waypoint index
-            idx, d_closest = find_closest_index(lat, lon, ref)
-            next_idx = min(idx + 1, len(ref) - 1)
+            # 1) Find closest reference point (optimized windowed search)
+            idx, d_closest = follower.find_closest_point(lat, lon)
+            
+            # 2) Get next waypoint (with circular wraparound)
+            next_idx = follower.get_next_waypoint(idx)
 
-            # 2) Desired bearing along the path
+            # 3) Desired bearing along the path
             b_des = bearing_deg(ref[idx]["lat"], ref[idx]["lon"],
                                 ref[next_idx]["lat"], ref[next_idx]["lon"])
 
-            # 3) If we have current heading, compute heading error
+            # 4) If we have current heading, compute heading error
             if heading is None:
                 # Fallback: bearing from current to next ref
                 b_cur_to_next = bearing_deg(lat, lon, ref[next_idx]["lat"], ref[next_idx]["lon"])
@@ -293,12 +458,12 @@ def follow_loop(args):
                 hdg_err = wrap180(b_des - heading)
                 have_heading = True
 
-            # 4) Cross-track error sign to tell left/right when rejoining
+            # 5) Cross-track error sign to tell left/right when rejoining
             xte = cross_track_error_m(lat, lon,
                                       ref[idx]["lat"], ref[idx]["lon"],
                                       ref[next_idx]["lat"], ref[next_idx]["lon"])
 
-            # 5) Decide command
+            # 6) Decide command
             cmd = ""
             if abs(xte) > rejoin_threshold_m:
                 # We're too far from the line: instruct rejoin direction
@@ -312,7 +477,7 @@ def follow_loop(args):
                 else:
                     cmd = f"TURN LEFT {abs(hdg_err):.0f}°"
 
-            # 6) Print status
+            # 7) Print status
             status = (
                 f"pos_err={d_closest:.1f} m | xtrack={xte:.1f} m | "
                 f"hdg_err={hdg_err:.1f}° | desired_brg={b_des:.1f}° | "
@@ -336,21 +501,24 @@ def follow_loop(args):
 # CLI
 # -----------------------
 def main():
-    p = argparse.ArgumentParser(description="NovAtel path recorder/follower (print-only).")
+    p = argparse.ArgumentParser(description="NovAtel path recorder/follower with loop closure and optimization.")
     sub = p.add_subparsers(dest="mode", required=True)
 
-    pr = sub.add_parser("record", help="Record a reference path (JSONL).")
+    pr = sub.add_parser("record", help="Record a reference path (auto-closes loop).")
     pr.add_argument("--serial", help="Serial port path, e.g. /dev/ttyUSB0 or COM3")
     pr.add_argument("--baud", type=int, default=115200, help="Serial baudrate")
     pr.add_argument("--tcp", help="TCP host:port instead of serial, e.g. 192.168.1.10:3001")
     pr.add_argument("--out", required=True, help="Output JSONL file")
     pr.add_argument("--min-move", type=float, default=1.0, help="Min movement (m) between logged points")
+    pr.add_argument("--loop-closure", type=float, default=10.0, help="Distance to start (m) to trigger loop closure")
+    pr.add_argument("--min-loop-points", type=int, default=20, help="Minimum points before checking loop closure")
 
-    pf = sub.add_parser("follow", help="Follow a saved path (print guidance).")
+    pf = sub.add_parser("follow", help="Follow a saved path (optimized with windowed search).")
     pf.add_argument("--serial", help="Serial port path, e.g. /dev/ttyUSB0 or COM3")
     pf.add_argument("--baud", type=int, default=115200, help="Serial baudrate")
     pf.add_argument("--tcp", help="TCP host:port instead of serial, e.g. 192.168.1.10:3001")
     pf.add_argument("--ref", required=True, help="Reference JSONL from record mode")
+    pf.add_argument("--search-window", type=int, default=100, help="Search window size (points) for optimization")
     pf.add_argument("--on-path", type=float, default=5.0, help="On-path distance threshold (m)")
     pf.add_argument("--rejoin", type=float, default=12.0, help="Rejoin threshold (m) before forcing REJOIN PATH")
     pf.add_argument("--hdg-continue", type=float, default=8.0, help="Heading-error (deg) to still print CONTINUE")
