@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 
 class CANMonitor:
-    def __init__(self, channel='can2'):
+    def __init__(self, channel='can0'):
         self.db = cantools.database.Database()
         try:
             self.db.add_dbc_file('./sygnal_dbc/mcm/Heartbeat.dbc')
