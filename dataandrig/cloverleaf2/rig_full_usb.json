@@ -11,7 +11,7 @@
                     "roll-pitch-yaw": [0.0, 0.0, 0.0],
                     "t": [0.0, 0.0, 0.0]
                 },
-                "parameter": "interface=can0,bitrate=500000,type=native",
+                "parameter": "device=can3,bitrate=500000,type=native",
                 "properties": {
                     "velocity_latency": "0.020",
                     "velocity_factor": "1.0"
