@@ -59,6 +59,7 @@ public:
         dwTime_t stateCommitInterval_us = 10000;      // 10ms state commit interval
     };
 
+    
     /// Parser state and diagnostics
     struct ParserDiagnostics 
     {
@@ -137,12 +138,19 @@ private:
             return committedNonSafetyState;
         }
         
-        bool isTemporallyCoherent(dwTime_t referenceTime, dwTime_t temporalWindow) const {
+        bool isTemporallyCoherent(dwTime_t referenceTime, dwTime_t temporalWindow, 
+                          bool requireWheelSpeeds = false) const {
             std::lock_guard<std::mutex> lock(stateMutex);
-            return (referenceTime - stateBuffer.lastSpeedUpdate <= temporalWindow) &&
-                   (referenceTime - stateBuffer.lastSteeringUpdate <= temporalWindow);
+            
+            bool baseCoherent = (referenceTime - stateBuffer.lastSpeedUpdate <= temporalWindow) &&
+                            (referenceTime - stateBuffer.lastSteeringUpdate <= temporalWindow);
+            if (requireWheelSpeeds) {
+                return baseCoherent && 
+                    (referenceTime - stateBuffer.lastWheelSpeedUpdate <= temporalWindow);
+            }
+            return baseCoherent;
         }
-        
+
         bool isStateComplete() const {
             std::lock_guard<std::mutex> lock(stateMutex);
             return stateBuffer.hasSpeed && stateBuffer.hasSteering;
@@ -187,7 +195,8 @@ public:
     
     /// Thread-safe vehicle state access
     bool getTemporallySynchronizedState(dwVehicleIOSafetyState* safetyState, 
-                                   dwVehicleIONonSafetyState* nonSafetyState);
+                                   dwVehicleIONonSafetyState* nonSafetyState,
+                                    dwVehicleIOActuationFeedback* actuationFeedback = nullptr);
     dwVehicleIOSafetyState getSafetyState() const;
     dwVehicleIONonSafetyState getNonSafetyState() const;
     bool hasValidState() const;

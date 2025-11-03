@@ -32,7 +32,7 @@ static inline uint64_t dbcMotorolaU(const uint8_t *data, int startBit, int lengt
 
 
 SygnalPomoParser::SygnalPomoParser()
-    : m_speedMeasurementType(DW_EGOMOTION_REAR_SPEED)
+    : m_speedMeasurementType(DW_EGOMOTION_REAR_WHEEL_SPEED)
 {
     initializeStructures();
     log("SygnalPomoParser: Real-time synchronized parser initialized\n");
@@ -336,10 +336,18 @@ bool SygnalPomoParser::processYawRateMessage(const dwCANMessage& frame)
 }
 
 
-
-bool SygnalPomoParser::getTemporallySynchronizedState(dwVehicleIOSafetyState* safetyState, 
-                                                     dwVehicleIONonSafetyState* nonSafetyState)
+bool SygnalPomoParser::getTemporallySynchronizedState(
+    dwVehicleIOSafetyState* safetyState, 
+    dwVehicleIONonSafetyState* nonSafetyState,
+    dwVehicleIOActuationFeedback* actuationFeedback)
 {
+    safetyState->size = sizeof(dwVehicleIOSafetyState);
+    nonSafetyState->size = sizeof(dwVehicleIONonSafetyState);
+    
+    if (actuationFeedback) {
+        actuationFeedback->size = sizeof(dwVehicleIOActuationFeedback);
+    }
+    
     if (!safetyState || !nonSafetyState) {
         return false;
     }
@@ -355,21 +363,66 @@ bool SygnalPomoParser::getTemporallySynchronizedState(dwVehicleIOSafetyState* sa
     dwTime_t currentTime = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     
-    if (!m_vehicleState->isTemporallyCoherent(currentTime, m_configuration.temporalWindow_us)) {
+    if (!m_vehicleState->isTemporallyCoherent(currentTime, m_configuration.temporalWindow_us, m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED)) {
         return false;
     }
 
-    // Apply latency compensation
-    auto compensatedNonSafety = m_vehicleState->stateBuffer.pendingNonSafety;
-    applyLatencyCompensation(compensatedNonSafety, currentTime);
-
-    // Preserve original CAN timestamps (critical for egomotion)
-    compensatedNonSafety.timestamp_us = m_vehicleState->stateBuffer.lastSpeedUpdate;
-    m_vehicleState->stateBuffer.pendingSafety.timestamp_us = m_vehicleState->stateBuffer.lastSteeringUpdate;
-
-    // Return synchronized states
+    // ========================================
+    // POPULATE SAFETY STATE
+    // ========================================
     *safetyState = m_vehicleState->stateBuffer.pendingSafety;
+    safetyState->timestamp_us = m_vehicleState->stateBuffer.lastSteeringUpdate;
+
+    // ========================================
+    // POPULATE NON-SAFETY STATE
+    // ========================================
+    auto compensatedNonSafety = m_vehicleState->stateBuffer.pendingNonSafety;
+    
+    // Apply velocity compensation
+    compensatedNonSafety.speedESC *= m_configuration.velocityFactor;
+    
+    
+    if (m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED) {
+        // For REAR_WHEEL_SPEED: use the most recent wheel timestamp
+        dwTime_t maxWheelTime = 0;
+        for (int i = 0; i < 4; i++) {
+            if (compensatedNonSafety.wheelTicksTimestamp[i] > maxWheelTime) {
+                maxWheelTime = compensatedNonSafety.wheelTicksTimestamp[i];
+            }
+        }
+        compensatedNonSafety.timestamp_us = maxWheelTime;
+    } else {
+        // For FRONT_SPEED or REAR_SPEED: use speed message timestamp
+        compensatedNonSafety.timestamp_us = m_vehicleState->stateBuffer.lastSpeedUpdate;
+    }
+    
     *nonSafetyState = compensatedNonSafety;
+
+    // ========================================
+    // ✅ NEW: POPULATE ACTUATION FEEDBACK
+    // ========================================
+    if (actuationFeedback) {
+        *actuationFeedback = {};  // Zero-initialize
+        actuationFeedback->size = sizeof(dwVehicleIOActuationFeedback);
+        
+        // Copy wheel speeds and timestamps (critical for REAR_WHEEL_SPEED mode)
+        for (int i = 0; i < 4; i++) {
+            actuationFeedback->wheelSpeed[i] = compensatedNonSafety.wheelSpeed[i];
+            actuationFeedback->wheelTicksTimestamp[i] = compensatedNonSafety.wheelTicksTimestamp[i];
+        }
+        
+        // Copy steering information
+        actuationFeedback->frontSteeringAngle = compensatedNonSafety.frontSteeringAngle;
+        actuationFeedback->frontSteeringTimestamp = compensatedNonSafety.frontSteeringTimestamp;
+        actuationFeedback->steeringWheelAngle = safetyState->steeringWheelAngle;
+        
+        // Copy speed (for diagnostics/redundancy)
+        actuationFeedback->speedESC = compensatedNonSafety.speedESC;
+        actuationFeedback->speedDirectionESC = compensatedNonSafety.speedDirectionESC;
+        
+        // Main timestamp (same as NonSafetyState)
+        actuationFeedback->timestamp_us = compensatedNonSafety.timestamp_us;
+    }
 
     // Update diagnostics
     m_diagnostics->stateCommitsSuccessful.fetch_add(1);
@@ -378,18 +431,6 @@ bool SygnalPomoParser::getTemporallySynchronizedState(dwVehicleIOSafetyState* sa
     return true;
 }
 
-
-void SygnalPomoParser::applyLatencyCompensation(dwVehicleIONonSafetyState& state, dwTime_t referenceTime)
-{
-    // Apply velocity latency compensation
-    if (m_configuration.velocityLatencyCompensation_us > 0) {
-        // Simple velocity scaling based on configured factor
-        state.speedESC *= m_configuration.velocityFactor;
-        
-        // For future enhancement: velocity extrapolation using acceleration
-        // Would require storing previous velocity measurements and computing derivatives
-    }
-}
 
 dwVehicleIOSafetyState SygnalPomoParser::getSafetyState() const
 {
@@ -643,7 +684,6 @@ float32_t SygnalPomoParser::extractWheelSpeed(const uint8_t* data, uint8_t lengt
     const float kmh = raw * 0.03125f;   // 0.03125 km/h per LSB
     return kmh / 3.6f;                  // m/s
 }
-
 
 
 dwVioDrivePositionStatus SygnalPomoParser::extractGearPosition(const uint8_t* data, uint8_t length)
