@@ -17,3 +17,7 @@
 *.prototxt
 *.weights
 *.cfg
+
+# Virtual environments
+venv/
+

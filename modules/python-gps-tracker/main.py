@@ -9,14 +9,15 @@ Features:
   - Smart initial localization
 
 Deps:
+    python -m venv venv
   pip install pyserial novatel_edie
 
 Usage:
   # 1) RECORD a loop/path (auto-stops when loop closes)
-  python main_optimized.py record --serial /dev/ttyUSB0 --baud 115200 --out loop_ref.jsonl
+  python main.py record --serial /dev/ttyUSB0 --baud 115200 --out loop_ref.jsonl
 
   # 2) FOLLOW the saved path
-  python main_optimized.py follow --serial /dev/ttyUSB0 --baud 115200 --ref loop_ref.jsonl
+  python main.py follow --serial /dev/ttyUSB0 --baud 115200 --ref loop_ref.jsonl
 """
 
 import argparse
@@ -101,11 +102,14 @@ def read_from_stream(stream, chunk=4096, is_serial=True):
 # -----------------------
 class NovAtelStream:
     def __init__(self):
-        self.parser = edie.Parser(encode_format=edie.ENCODE_FORMAT.FLATTENED_BINARY)
+        # self.parser = edie.Parser(encode_format=edie.ENCODE_FORMAT.FLATTENED_BINARY)
+        self.parser = edie.Parser()
+        self.parser.filter = edie.Filter()  # Add this line
         # Filter messages we care about
-        self.parser.filter.include_message_name("BESTPOS")   # lat/lon/height
-        self.parser.filter.include_message_name("BESTVEL")   # speed/course (if configured)
-        self.parser.filter.include_message_name("INSPVAX")   # fused INS/GNSS with heading, speed
+        # Use add_message_name instead of include_message_name
+        self.parser.filter.add_message_name("BESTPOS")   # lat/lon/height
+        self.parser.filter.add_message_name("BESTVEL")   # speed/course
+        self.parser.filter.add_message_name("INSPVAX")   # fused INS/GNSS
 
         # Snapshot of latest values
         self.last_lat = None
