@@ -1,0 +1,10 @@
+{
+  "dataConditionerParams" : {
+    "meanValue" : [123.675, 116.28, 103.53],
+    "stdev" : [58.395, 57.12, 57.375],
+    "splitPlanes" : true,
+    "pixelScaleCoefficient": 1.0,
+    "ignoreAspectRatio" : false,
+    "doPerPlaneMeanNormalization" : false
+  }
+}
