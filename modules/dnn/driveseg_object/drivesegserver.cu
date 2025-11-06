@@ -59,7 +59,7 @@ static_assert(MAX_CAMS >= 4, "MAX_CAMS must be at least 4");
 constexpr float kOverlayAlpha = 0.35f;
 
 // ===============================================================
-// CUDA KERNELS (unchanged from original)
+// CUDA KERNELS 
 // ===============================================================
 
 __global__ void argmaxNCHW_kernel(
@@ -96,7 +96,7 @@ __global__ void colorizeAndBlend_kernel(
     int imgW, int imgH, int imgStrideBytes,
     int maskW, int maskH,
     const uint8_t* colorLUT,
-    float alpha)
+    float alpha )
 {
     const int x = blockIdx.x * blockDim.x + threadIdx.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -177,6 +177,47 @@ struct SerializableFrame {
 // ===============================================================
 // SERVER APPLICATION
 // ===============================================================
+
+__global__ void downscaleKernel(
+    uint8_t* dst,
+    const uint8_t* src,
+    int dstW, int dstH,
+    int srcW, int srcH,
+    int srcPitch,
+    float scaleX, float scaleY)
+{
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if (x >= dstW || y >= dstH) return;
+    
+    // Bilinear sampling
+    const float srcX = x * scaleX;
+    const float srcY = y * scaleY;
+    
+    const int x0 = (int)srcX;
+    const int y0 = (int)srcY;
+    const int x1 = min(x0 + 1, srcW - 1);
+    const int y1 = min(y0 + 1, srcH - 1);
+    
+    const float fx = srcX - x0;
+    const float fy = srcY - y0;
+    
+    // Sample 4 neighbors
+    const uint8_t* p00 = src + y0 * srcPitch + x0 * 4;
+    const uint8_t* p10 = src + y0 * srcPitch + x1 * 4;
+    const uint8_t* p01 = src + y1 * srcPitch + x0 * 4;
+    const uint8_t* p11 = src + y1 * srcPitch + x1 * 4;
+    
+    uint8_t* out = dst + y * (dstW * 4) + x * 4;
+    
+    // Bilinear interpolation for each channel
+    for (int c = 0; c < 4; ++c) {
+        float v0 = p00[c] * (1 - fx) + p10[c] * fx;
+        float v1 = p01[c] * (1 - fx) + p11[c] * fx;
+        out[c] = (uint8_t)(v0 * (1 - fy) + v1 * fy);
+    }
+}
 
 class DriveSeg4CamServer
 {
@@ -284,7 +325,7 @@ private:
     } m_dnnCtx[MAX_CAMS];
 
     // IPC Socket Server
-    dwSocketServerHandle_t m_socketServer{DW_NULL_HANDLE};
+    dwSocketServerHandle_t m_socketServers[MAX_CAMS]{DW_NULL_HANDLE};
     dwSocketConnectionHandle_t m_connections[MAX_CAMS]{DW_NULL_HANDLE};
     std::mutex m_socketMutex;
     uint16_t m_serverPort{49252};
@@ -320,7 +361,7 @@ private:
 
     // Frame extraction & transmission
     SerializableFrame extractFrameData(uint32_t i);
-    void sendFrameToClients(const SerializableFrame& frame);
+    bool sendFrameToClients(const SerializableFrame& frame);
 
     // Utilities
     std::string platformPrefix();
@@ -384,7 +425,7 @@ void DriveSeg4CamServer::release()
     std::cout << "[Server] Releasing...\n";
     m_running = false;
 
-    // ✅ NEW: Wake up and join send threads FIRST
+    
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         m_sendCV[i].notify_all();
     }
@@ -660,13 +701,10 @@ void DriveSeg4CamServer::processFrame()
     m_frameCounter++;
 }
 
-
-
 void DriveSeg4CamServer::sendThreadFunc(uint32_t camIndex)
 {
     std::cout << "[Send Thread " << camIndex << "] Started\n";
     
-    // Accept connection on dedicated port
     std::cout << "[Send Thread " << camIndex << "] Waiting for client on port " 
               << (m_serverPort + camIndex) << "...\n";
     
@@ -681,8 +719,9 @@ void DriveSeg4CamServer::sendThreadFunc(uint32_t camIndex)
     }
     
     std::cout << "[Send Thread " << camIndex << "] Client connected!\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << "[Send Thread " << camIndex << "] Starting transmission...\n";
     
-    // Main send loop with rate limiting
     while (m_running) {
         SerializableFrame frame;
         
@@ -700,14 +739,20 @@ void DriveSeg4CamServer::sendThreadFunc(uint32_t camIndex)
             m_sendQueue[camIndex].pop();
         }
         
-        // Send with verification
+        auto sendStart = std::chrono::high_resolution_clock::now();
+        
         if (!sendFrameToClients(frame)) {
-            std::cout << "[Send Thread " << camIndex << "] Send failed, client may have disconnected\n";
+            std::cout << "[Send Thread " << camIndex << "] Send failed\n";
             break;
         }
         
-        // Rate limit: ~30fps max
-        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+        auto sendEnd = std::chrono::high_resolution_clock::now();
+        float sendMs = std::chrono::duration<float, std::milli>(sendEnd - sendStart).count();
+        
+        if (frame.frameId % 30 == 0) {  // Log every 30 frames
+            std::cout << "[Send Thread " << camIndex << "] Frame " << frame.frameId 
+                      << " transmitted in " << sendMs << "ms\n";
+        }
     }
     
     std::cout << "[Send Thread " << camIndex << "] Stopped\n";
@@ -996,32 +1041,74 @@ void DriveSeg4CamServer::collectDetectionResults(uint32_t i)
 // FRAME EXTRACTION & IPC TRANSMISSION
 // ===============================================================
 
+
 SerializableFrame DriveSeg4CamServer::extractFrameData(uint32_t i)
 {
     SerializableFrame frame;
     frame.cameraIndex = i;
     
-    // Extract image data
+    // Extract source image
     dwImageCUDA* cudaImg = nullptr;
     CHECK_DW_ERROR(dwImage_getCUDA(&cudaImg, m_imgRGBA[i]));
     
-    frame.width = cudaImg->prop.width;
-    frame.height = cudaImg->prop.height;
-    frame.stride = cudaImg->pitch[0];
+    const uint32_t srcWidth = cudaImg->prop.width;
+    const uint32_t srcHeight = cudaImg->prop.height;
     
-    const size_t imageBytes = frame.stride * frame.height;
-    frame.rgbaPixels.resize(imageBytes);
+    const uint32_t dstWidth = 640;
+    const uint32_t dstHeight = 640;
     
-    // Copy from GPU to CPU
-    cudaMemcpy(frame.rgbaPixels.data(), cudaImg->dptr[0], 
-               imageBytes, cudaMemcpyDeviceToHost);
+    frame.width = dstWidth;
+    frame.height = dstHeight;
+    frame.stride = dstWidth * 4;  // RGBA
     
-    // Extract detection data
+    const size_t dstImageBytes = dstWidth * dstHeight * 4;
+    frame.rgbaPixels.resize(dstImageBytes);
+    
+    // Create temporary device buffer for downscaled image
+    uint8_t* d_downscaled = nullptr;
+    cudaMalloc(&d_downscaled, dstImageBytes);
+    
+    // Simple CUDA bilinear downscale
+    const float scaleX = (float)srcWidth / dstWidth;
+    const float scaleY = (float)srcHeight / dstHeight;
+    
+    dim3 block(16, 16);
+    dim3 grid((dstWidth + 15) / 16, (dstHeight + 15) / 16);
+    
+    // Launch downscale kernel (defined below)
+    downscaleKernel<<<grid, block>>>(
+        d_downscaled,
+        reinterpret_cast<uint8_t*>(cudaImg->dptr[0]),
+        dstWidth, dstHeight,
+        srcWidth, srcHeight,
+        cudaImg->pitch[0],
+        scaleX, scaleY
+    );
+    
+    cudaDeviceSynchronize();
+    
+    // Copy downscaled image to CPU
+    cudaMemcpy(frame.rgbaPixels.data(), d_downscaled, dstImageBytes, cudaMemcpyDeviceToHost);
+    cudaFree(d_downscaled);
+    
+    // Extract detection data (scale coordinates)
     auto &c = m_dnnCtx[i];
     {
         std::lock_guard<std::mutex> lock(c.detMutex);
-        frame.boxes = c.detBoxes;
+        frame.boxes.reserve(c.detBoxes.size());
         frame.labels = c.detLabels;
+        
+        const float coordScaleX = (float)dstWidth / srcWidth;
+        const float coordScaleY = (float)dstHeight / srcHeight;
+        
+        for (const auto& box : c.detBoxes) {
+            dwRectf scaledBox;
+            scaledBox.x = box.x * coordScaleX;
+            scaledBox.y = box.y * coordScaleY;
+            scaledBox.width = box.width * coordScaleX;
+            scaledBox.height = box.height * coordScaleY;
+            frame.boxes.push_back(scaledBox);
+        }
     }
     
     // Extract stats
@@ -1031,16 +1118,24 @@ SerializableFrame DriveSeg4CamServer::extractFrameData(uint32_t i)
     frame.avgDetMs = c.avgDetMs;
     frame.frameId = c.frameId;
     
+    std::cout << "[Extract] Cam " << i << " | Downscaled " << srcWidth << "x" << srcHeight 
+              << " → " << dstWidth << "x" << dstHeight 
+              << " | Size: " << dstImageBytes << " bytes\n";
+    
     return frame;
 }
 
-bool DriveSeg4CamServer::sendFrameToClients(const SerializableFrame& frame)  // Changed to bool
+
+bool DriveSeg4CamServer::sendFrameToClients(const SerializableFrame& frame)
 {
     std::lock_guard<std::mutex> lock(m_socketMutex);
     
-    if (!m_connections[frame.cameraIndex]) return false;
+    if (!m_connections[frame.cameraIndex]) {
+        std::cout << "[IPC] ERROR: No connection for camera " << frame.cameraIndex << "\n";
+        return false;
+    }
     
-    // Send header
+    // Prepare header
     FrameHeader header{};
     header.magic = 0xDEADBEEF;
     header.cameraIndex = frame.cameraIndex;
@@ -1055,32 +1150,52 @@ bool DriveSeg4CamServer::sendFrameToClients(const SerializableFrame& frame)  // 
     header.avgSegMs = frame.avgSegMs;
     header.avgDetMs = frame.avgDetMs;
     
+    std::cout << "[IPC] Sending frame " << frame.frameId << " to cam " << frame.cameraIndex 
+              << " | Size: " << frame.rgbaPixels.size() << " bytes | Boxes: " << frame.boxes.size() << "\n";
+    
+    // Send header
     size_t headerSize = sizeof(FrameHeader);
+    size_t headerSent = headerSize;  // Track actual bytes sent
+    
     dwStatus status = dwSocketConnection_write(
         reinterpret_cast<uint8_t*>(&header), 
-        &headerSize, 
-        5000,
+        &headerSent,  // This gets updated with actual bytes written
+        30000,
         m_connections[frame.cameraIndex]
     );
     
     if (status != DW_SUCCESS) {
+        std::cout << "[IPC] ERROR: Header write failed with status: " << dwGetStatusName(status) 
+                  << " (code " << status << ")"
+                  << " | Expected: " << headerSize << " bytes"
+                  << " | Actual: " << headerSent << " bytes\n";
         return false;
     }
+    
+    std::cout << "[IPC] Header sent successfully (" << headerSent << " bytes)\n";
     
     // Send image
     size_t imageSize = frame.rgbaPixels.size();
+    size_t imageSent = imageSize;
+    
     status = dwSocketConnection_write(
         const_cast<uint8_t*>(frame.rgbaPixels.data()),
-        &imageSize,
-        5000,
+        &imageSent,
+        30000,
         m_connections[frame.cameraIndex]
     );
     
     if (status != DW_SUCCESS) {
+        std::cout << "[IPC] ERROR: Image write failed with status: " << dwGetStatusName(status)
+                  << " (code " << status << ")"
+                  << " | Expected: " << imageSize << " bytes"
+                  << " | Actual: " << imageSent << " bytes\n";
         return false;
     }
     
-    // Send boxes
+    std::cout << "[IPC] Image sent successfully (" << imageSent << " bytes)\n";
+    
+    // Send boxes (keep existing code but add logging on failure)
     for (size_t i = 0; i < frame.boxes.size(); ++i) {
         DetectionBox box{};
         box.x = frame.boxes[i].x;
@@ -1093,17 +1208,20 @@ bool DriveSeg4CamServer::sendFrameToClients(const SerializableFrame& frame)  // 
         status = dwSocketConnection_write(
             reinterpret_cast<uint8_t*>(&box),
             &boxSize,
-            5000,
+            30000,
             m_connections[frame.cameraIndex]
         );
         
         if (status != DW_SUCCESS) {
+            std::cout << "[IPC] ERROR: Box " << i << " write failed: " << dwGetStatusName(status) << "\n";
             return false;
         }
     }
     
-    return true;  // Success
+    std::cout << "[IPC] Frame " << frame.frameId << " transmitted successfully\n";
+    return true;
 }
+
 
 // ===============================================================
 // UTILITIES

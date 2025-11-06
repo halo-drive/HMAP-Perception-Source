@@ -1,7 +1,7 @@
 project(driveseg_object)
 
 set(SOURCES
-    main.cu
+    drivesegserver.cu
 )
 
 set(LIBRARIES
