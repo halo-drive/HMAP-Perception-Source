@@ -131,7 +131,7 @@ private:
     dwImageStreamerHandle_t m_streamerToGL[MAX_CAMS]{DW_NULL_HANDLE};
 
     // IPC Socket Client
-    dwSocketClientHandle_t m_socketClient{DW_NULL_HANDLE};
+    dwSocketClientHandle_t m_socketClients[MAX_CAMS]{DW_NULL_HANDLE};
     dwSocketConnectionHandle_t m_connections[MAX_CAMS]{DW_NULL_HANDLE};
     std::mutex m_frameMutex[MAX_CAMS];
     ReceivedFrame m_latestFrames[MAX_CAMS];
@@ -218,9 +218,9 @@ void DriveSeg4CamClient::onRelease()
         if (m_connections[i]) {
             dwSocketConnection_release(m_connections[i]);
         }
-    }
-    if (m_socketClient) {
-        dwSocketClient_release(m_socketClient);
+        if (m_socketClients[i]) {
+            dwSocketClient_release(m_socketClients[i]);
+        }
     }
 
     // Release images
@@ -313,29 +313,33 @@ void DriveSeg4CamClient::initImages()
     std::cout << "[Client] CUDA images initialized\n";
 }
 
+
 void DriveSeg4CamClient::initSocketClient()
 {
-    CHECK_DW_ERROR(dwSocketClient_initialize(&m_socketClient, m_numCameras, m_ctx));
-
-    std::cout << "[IPC] Connecting to server " << m_serverIP << ":" << m_serverPort << "...\n";
+    std::cout << "[IPC] Connecting to server " << m_serverIP << "...\n";
 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
-        uint16_t port = m_serverPort + i;  // Separate port per camera
+        uint16_t port = m_serverPort + i;
         
-        CHECK_DW_ERROR(dwSocketClient_initialize(&m_socketClient, 1, m_ctx));
+        CHECK_DW_ERROR(dwSocketClient_initialize(&m_socketClients[i], 1, m_ctx));
+        
+        std::cout << "[IPC] Connecting camera " << i << " to port " << port << "...\n";
         
         dwStatus status = DW_TIME_OUT;
         int attempts = 0;
         
-        std::cout << "[IPC] Connecting camera " << i << " to port " << port << "...\n";
-        
         while (status == DW_TIME_OUT && attempts < 30) {
             status = dwSocketClient_connect(&m_connections[i], m_serverIP.c_str(), 
-                                        port, 1000, m_socketClient);
+                                           port, 1000, m_socketClients[i]);
             attempts++;
+        }
+        
+        if (status == DW_SUCCESS) {
+            std::cout << "[IPC] Camera " << i << " connected to port " << port << "\n";
+        } else {
+            throw std::runtime_error("Failed to connect camera " + std::to_string(i));
+        }
     }
-
-}
 }
 
 // ===============================================================
