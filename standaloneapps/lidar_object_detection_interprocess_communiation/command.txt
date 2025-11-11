@@ -1,0 +1,1 @@
+./lidar_object_detection_interprocess_communiation --rigFile='path for rig file0' --tensorRTEngine='path to trt model' --ip=127.0.0.1 --port=40002 --offscreen=1 > path_where_logs_will_be_saved.txt 2>&1

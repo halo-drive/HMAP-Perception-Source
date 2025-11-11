@@ -1,0 +1,68 @@
+{
+    "rig": {
+        "sensors": [
+  
+            {
+                "name": "lidar:front:vlp16",
+                "nominalSensor2Rig": {
+                    "quaternion": [0.0, 0.0, 0.0, 1.0],
+                    "t": [0.0, 2.16, 1.52]
+                },
+                "parameter": "ip=192.168.1.201,port=2368,device=VELO_VLP16,scan-frequency=10.0,protocol=udp",
+                "properties": null,
+                "protocol": "lidar.socket",
+                "sensor2Rig": {
+                    "quaternion": [0.0, 0.0, 0.0, 1.0],
+                    "t": [0.0, 2.16, 1.52]
+                },
+                "correction_rig_T": [0.0, 0.0, 0.0],
+                "correction_sensor_R_FLU": {
+                    "roll-pitch-yaw": [0.0, 0.0, 0.0]
+                }
+            },
+            {
+                "name": "lidar:rear:vlp16hr",
+                "nominalSensor2Rig": {
+                    "quaternion": [0.0, 0.0, 0.0, 1.0],
+                    "t": [0.0, 0.94, 1.80]
+                },
+                "parameter": "ip=192.168.1.202,port=2369,device=VELO_VLP16HR,scan-frequency=10.0,protocol=udp",
+                "properties": null,
+                "protocol": "lidar.socket",
+                "sensor2Rig": {
+                    "quaternion": [0.0, 0.0, 0.0, 1.0],
+                    "t": [0.0, 0.94, 1.80]
+                },
+                "correction_rig_T": [0.0, 0.0, 0.0],
+                "correction_sensor_R_FLU": {
+                    "roll-pitch-yaw": [0.0, 0.0, 0]
+                }
+            }
+        ],
+        "vehicle": {
+            "valid": true,
+            "value": {
+                "COMMENT": "Vehicle configuration with zero transformations for testing",
+                "axlebaseFront": 1.5,
+                "axlebaseRear": 1.5,
+                "bumperFront": 0.8,
+                "bumperRear": 0.8,
+                "centerOfMassToRearAxle": 1.5,
+                "frontCorneringStiffness": 30000.0,
+                "height": 2.0,
+                "inertia": 1500.0,
+                "length": 4.0,
+                "mass": 1500.0,
+                "rearCorneringStiffness": 35000.0,
+                "steeringCoefficient": 15.0,
+                "wheelDiameter": 0.65,
+                "wheelbase": 2.8,
+                "width": 1.8,
+                "widthWithMirrors": 2.1
+            }
+        }
+    },
+    "version": 2
+  }
+  
+  
