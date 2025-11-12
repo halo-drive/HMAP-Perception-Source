@@ -151,13 +151,21 @@ public:
             packet.groundPlane.valid = false;
         }
         
-        // Copy free space data
+        // Copy free space data (ALL points, not truncated)
         if (this->isFreeSpaceEnabled()) {
             const std::vector<float32_t>& freeSpacePts = this->getFreeSpacePoints();
             if (!freeSpacePts.empty()) {
-                packet.freeSpace.numPoints = std::min(static_cast<uint32_t>(freeSpacePts.size() / 3), 360u);
+                uint32_t totalPoints = static_cast<uint32_t>(freeSpacePts.size() / 3);
+                packet.freeSpace.numPoints = std::min(totalPoints, FreeSpaceData::MAX_FREE_SPACE_POINTS);
+                
+                // Copy all available points (up to max capacity)
                 for (uint32_t i = 0; i < packet.freeSpace.numPoints * 3; ++i) {
                     packet.freeSpace.points[i] = freeSpacePts[i];
+                }
+                
+                if (totalPoints > FreeSpaceData::MAX_FREE_SPACE_POINTS) {
+                    std::cout << "Warning: Free space points truncated from " << totalPoints 
+                              << " to " << FreeSpaceData::MAX_FREE_SPACE_POINTS << std::endl;
                 }
             } else {
                 packet.freeSpace.numPoints = 0;
@@ -222,14 +230,58 @@ public:
     }
     
     // Override onInitialize to add IPC initialization
+    // Producer has ZERO rendering code - pure processing/inference only
     bool onInitialize() override
     {
-        bool result = InterLidarICP::onInitialize();
-        if (result && m_ipcEnabled) {
-            result = initializeIPC();
+        // Producer is always headless - base class has no rendering code
+        try {
+            // Initialize DriveWorks - producer is ALWAYS headless (no visualization)
+            initDriveWorks();
+            
+            initSensors();
+            initBuffers();
+            initAccumulation();
+            initICP();
+            initStitching();
+            initGroundPlaneExtraction();
+            // SKIP: initRendering() - removed from base class (no rendering code)
+            initLogging();
+            
+            // SKIP: inspectRenderBuffers() - producer has NO render buffers
+            
+            // Initialize object detection
+            if (!initializeObjectDetection()) {
+                std::cerr << "Failed to initialize object detection" << std::endl;
+                return false;
+            }
+            
+            // Skip initFreeSpaceRendering() - no rendering in producer
+            // Free space calculation still happens in onProcess(), just no rendering
+            
+            // Skip initial frames for sensor stabilization
+            uint32_t skipFrames = 5; // Default
+            std::cout << "Skipping " << skipFrames << " initial frames for sensor stabilization..." << std::endl;
+            for (uint32_t i = 0; i < skipFrames; ++i) {
+                onProcess();
+            }
+            
+            std::cout << "Producer initialization complete (headless mode - no visualization)" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Exception during initialization: " << e.what() << std::endl;
+            return false;
         }
-        return result;
+        
+        // Initialize IPC
+        if (m_ipcEnabled) {
+            if (!initializeIPC()) {
+                return false;
+            }
+        }
+        
+        return true;
     }
+    
+    // onRender() is already empty in base class - no override needed
     
     // Override onProcess to send data after processing
     void onProcess() override
@@ -243,9 +295,10 @@ public:
         }
     }
     
-    // Override onRelease to clean up IPC
+    // Override onRelease to clean up IPC only (no rendering cleanup needed)
     void onRelease() override
     {
+        // Clean up IPC
         if (m_ipcEnabled) {
             if (m_socketConnection != DW_NULL_HANDLE) {
                 dwSocketConnection_release(m_socketConnection);
@@ -257,6 +310,7 @@ public:
             }
         }
         
+        // Call base class release (no rendering cleanup needed - base class has no rendering code)
         InterLidarICP::onRelease();
     }
     
@@ -323,7 +377,8 @@ int main(int argc, const char **argv)
         return -1;
     }
 
-    app.initializeWindow("Detection Producer", 1, 1, args.enabled("offscreen"));
+    // No window initialization needed - producer is completely headless
+    // All visualization is handled by the consumer application
 
     // Run processing loop
     while (app.isRunning()) {

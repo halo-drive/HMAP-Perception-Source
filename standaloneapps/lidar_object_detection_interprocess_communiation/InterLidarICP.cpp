@@ -329,13 +329,8 @@ void InterLidarICP::initDriveWorks()
     std::cout << "[CUDA-NATIVE] Initialized memory coherency stream and events for unified memory" << std::endl;
     #endif
     
-    // Initialize visualization (optional for headless mode)
-    dwStatus vizStatus = dwVisualizationInitialize(&m_viz, m_context);
-    if (vizStatus != DW_SUCCESS) {
-        std::cout << "Visualization initialization failed (running in headless mode): " 
-                  << dwGetStatusName(vizStatus) << std::endl;
-        m_viz = DW_NULL_HANDLE;
-    }
+    // Removed visualization initialization - producer has no rendering code
+    // Producer is always headless (pure processing/inference only)
     
     std::cout << "DriveWorks SDK initialized successfully" << std::endl;
 }
@@ -454,24 +449,7 @@ void InterLidarICP::initBuffers()
 
 
 
-void InterLidarICP::initFreeSpaceRendering()
-{
-    // Create render buffer for free space points
-    // Assume max 50,000 free space points (100m x 100m at 0.2m resolution)
-    uint32_t maxFreeSpacePoints = 50000;
-    
-    // Only create render buffer if rendering is available
-    if (m_renderEngine != DW_NULL_HANDLE) {
-        CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_freeSpaceRenderBufferId,
-                                                   DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-                                                   sizeof(dwVector3f),
-                                                   0,
-                                                   maxFreeSpacePoints,
-                                                   m_renderEngine));
-    }
-    
-    std::cout << "Free space render buffer initialized with " << maxFreeSpacePoints << " points" << std::endl;
-}
+// Removed initFreeSpaceRendering() - producer has no rendering code
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -503,45 +481,7 @@ void InterLidarICP::performFreeSpaceDetection()
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::renderFreeSpace()
-{
-    if (!m_freeSpaceVisualizationEnabled || m_freeSpacePoints.empty()) {
-        return;
-    }
-    
-    // Map render buffer
-    dwVector3f* vertices = nullptr;
-    uint32_t numPoints = m_freeSpacePoints.size() / 3; // x, y, intensity triplets
-    // uint32_t bufferSize = numPoints * sizeof(dwVector3f);
-    const uint32_t MAX_BUFFER_CAPACITY = 50000;  // Must match buffer creation
-    numPoints = std::min(numPoints, MAX_BUFFER_CAPACITY);  // ← THIS IS THE KEY FIX
-    uint32_t bufferSize = numPoints * sizeof(dwVector3f);  // Now bufferSize is safe
-
-    
-    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(m_freeSpaceRenderBufferId,
-                                            reinterpret_cast<void**>(&vertices),
-                                            0,
-                                            bufferSize,
-                                            DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-                                            m_renderEngine));
-    
-    // Convert free space points to 3D vertices (on ground level)
-    for (uint32_t i = 0; i < numPoints; i++) {
-        vertices[i].x = m_freeSpacePoints[i * 3 + 0];
-        vertices[i].y = m_freeSpacePoints[i * 3 + 1];
-        vertices[i].z = 0.0f; // Free space at ground level
-    }
-    
-    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(m_freeSpaceRenderBufferId,
-                                              DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-                                              m_renderEngine));
-    
-    // Render free space in bright green with transparency
-    dwRenderEngine_setColor({0.0f, 1.0f, 0.0f, 0.6f}, m_renderEngine);
-    dwRenderEngine_setPointSize(3.0f, m_renderEngine);
-    dwRenderEngine_renderBuffer(m_freeSpaceRenderBufferId, numPoints, m_renderEngine);
-    dwRenderEngine_setPointSize(1.0f, m_renderEngine); // Reset
-}
+// Removed renderFreeSpace() - producer has no rendering code
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -726,158 +666,10 @@ void InterLidarICP::initGroundPlaneExtraction()
 //     std::cout << "Ground plane render buffer initialized with " << gridVertices << " vertices" << std::endl;
 // }
 
-void InterLidarICP::initGroundPlaneRenderBuffer()
-{
-    // CORRECT: Calculate exact vertices needed for the mesh
-    // For a grid of GROUND_PLANE_GRID_SIZE x GROUND_PLANE_GRID_SIZE,
-    // we generate (SIZE-1) x (SIZE-1) cells, each with 2 triangles (6 vertices)
-    uint32_t gridVertices = (GROUND_PLANE_GRID_SIZE - 1) * (GROUND_PLANE_GRID_SIZE - 1) * 6;
-    
-    std::cout << "Ground plane buffer calculation:" << std::endl;
-    std::cout << "  Grid size: " << GROUND_PLANE_GRID_SIZE << "x" << GROUND_PLANE_GRID_SIZE << std::endl;
-    std::cout << "  Cells: " << (GROUND_PLANE_GRID_SIZE - 1) << "x" << (GROUND_PLANE_GRID_SIZE - 1) << std::endl;
-    std::cout << "  Vertices per cell: 6 (2 triangles)" << std::endl;
-    std::cout << "  Total vertices: " << gridVertices << std::endl;
-    
-    // Only create render buffer if rendering is available
-    if (m_renderEngine != DW_NULL_HANDLE) {
-        CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_groundPlaneRenderBufferId,
-                                                   DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
-                                                   sizeof(dwVector3f),
-                                                   0,
-                                                   gridVertices,  // FIXED: Use correct size
-                                                   m_renderEngine));
-    }
-    
-    std::cout << "Ground plane render buffer initialized with EXACT " << gridVertices << " vertices" << std::endl;
-    
-    // AARCH64-SPECIFIC: CUDA-native buffer initialization (replaces compiler barriers)
-    #ifdef __aarch64__
-    dwVector3f* vertices = nullptr;
-    uint32_t bufferSizeBytes = gridVertices * sizeof(dwVector3f);
-    
-    std::cout << "[CUDA-NATIVE] Performing initial buffer clear with CUDA-synchronization..." << std::endl;
-    
-    // Map buffer immediately after creation
-    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(m_groundPlaneRenderBufferId,
-                                            reinterpret_cast<void**>(&vertices),
-                                            0,
-                                            bufferSizeBytes,
-                                            DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
-                                            m_renderEngine));
-    
-    // AARCH64-SPECIFIC: Enhanced buffer clearing for cache coherency
-    #ifdef __aarch64__
-    // Step 1: CPU clears the mapped buffer (only CPU operations work on mapped buffers)
-    memset(vertices, 0, bufferSizeBytes);
-    
-    // Step 2: Write sentinel pattern for debugging
-    for (uint32_t i = 0; i < gridVertices; i++) {
-        vertices[i] = {0.0f, 0.0f, -999.0f};  // Sentinel value for debugging
-    }
-    
-    // Step 3: CUDA-native memory barrier (ensures CPU writes complete before GPU reads)
-    CHECK_CUDA_ERROR(cudaEventRecord(m_cpuWriteCompleteEvent, m_memoryCoherencyStream));
-    CHECK_CUDA_ERROR(cudaStreamSynchronize(m_memoryCoherencyStream));
-    
-    std::cout << "  Buffer cleared and initialized with CUDA-native synchronization" << std::endl;
-    #else
-    // Standard initialization for x86
-    memset(vertices, 0, bufferSizeBytes);
-    for (uint32_t i = 0; i < gridVertices; i++) {
-        vertices[i] = {0.0f, 0.0f, -999.0f};  // Sentinel value for debugging
-    }
-    #endif
-    
-    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(m_groundPlaneRenderBufferId,
-                                              DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
-                                              m_renderEngine));
-    
-    std::cout << "[CUDA-NATIVE] Buffer initialization complete with unified memory prefetching" << std::endl;
-    #endif
-}
+// Removed initGroundPlaneRenderBuffer() - producer has no rendering code
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::initRendering()
-{
-    // Skip rendering initialization if visualization is not available (headless mode)
-    if (m_viz == DW_NULL_HANDLE) {
-        std::cout << "Skipping render engine initialization (headless mode)" << std::endl;
-        return;
-    }
-    
-    dwRenderEngineParams params{};
-    CHECK_DW_ERROR(dwRenderEngine_initDefaultParams(&params,
-                                                    static_cast<uint32_t>(getWindowWidth()),
-                                                    static_cast<uint32_t>(getWindowHeight())));
-    CHECK_DW_ERROR(dwRenderEngine_initialize(&m_renderEngine, &params, m_viz));
-
-    CHECK_DW_ERROR(dwRenderEngine_initTileState(&params.defaultTile));
-
-    dwRenderEngineTileState tileParam = params.defaultTile;
-    tileParam.layout.sizeLayout = DW_RENDER_ENGINE_TILE_LAYOUT_TYPE_RELATIVE;
-    tileParam.layout.positionLayout = DW_RENDER_ENGINE_TILE_LAYOUT_TYPE_RELATIVE;
-
-    // COMMENTED OUT: Individual LiDAR tiles - only showing ICP alignment view
-    // Create tiles: 2x2 layout
-    // Top-left: LiDAR A
-    // tileParam.layout.viewport = {0.f, 0.f, 0.5f, 0.5f};
-    // tileParam.layout.positionType = DW_RENDER_ENGINE_TILE_POSITION_TYPE_TOP_LEFT;
-    // CHECK_DW_ERROR(dwRenderEngine_addTile(&m_lidarTiles[LIDAR_A_INDEX].tileId, &tileParam, m_renderEngine));
-
-    // COMMENTED OUT: Individual LiDAR tiles - only showing ICP alignment view
-    // Top-right: LiDAR B
-    // tileParam.layout.viewport = {0.5f, 0.f, 0.5f, 0.5f};
-    // CHECK_DW_ERROR(dwRenderEngine_addTile(&m_lidarTiles[LIDAR_B_INDEX].tileId, &tileParam, m_renderEngine));
-
-    // COMMENTED OUT: Individual LiDAR tiles - only showing ICP alignment view
-    // Bottom-left: ICP alignment view
-    // tileParam.layout.viewport = {0.f, 0.5f, 0.5f, 0.5f};
-    // CHECK_DW_ERROR(dwRenderEngine_addTile(&m_icpTile.tileId, &tileParam, m_renderEngine));
-
-    // MODIFIED: Single full-screen ICP alignment view
-    tileParam.layout.viewport = {0.f, 0.f, 1.0f, 1.0f};
-    tileParam.layout.positionType = DW_RENDER_ENGINE_TILE_POSITION_TYPE_TOP_LEFT;
-    CHECK_DW_ERROR(dwRenderEngine_addTile(&m_icpTile.tileId, &tileParam, m_renderEngine));
-
-    // Bottom-right: Stitched view (commented out - redundant with post-ICP view)
-    // tileParam.layout.viewport = {0.5f, 0.5f, 0.5f, 0.5f};
-    // CHECK_DW_ERROR(dwRenderEngine_addTile(&m_stitchedTile.tileId, &tileParam, m_renderEngine));
-
-    // COMMENTED OUT: Individual LiDAR render buffers - only showing ICP alignment view
-    // Create render buffers
-    // for (uint32_t i = 0; i < m_lidarCount; i++) {
-    //     CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_lidarTiles[i].renderBufferId,
-    //                                                DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-    //                                                sizeof(dwVector4f),
-    //                                                0,
-    //                                                m_lidarProps[i].pointsPerSpin,
-    //                                                m_renderEngine));
-    // }
-
-    CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_icpTile.renderBufferId,
-                                               DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-                                               sizeof(dwVector4f),
-                                               0,
-                                               m_stitchedPoints.capacity,
-                                               m_renderEngine));
-
-    // Stitched view buffer creation commented out - redundant with post-ICP view
-    // CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_stitchedTile.renderBufferId,
-    //                                            DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-    //                                            sizeof(dwVector4f),
-    //                                            0,
-    //                                            m_stitchedPoints.capacity,
-    //                                            m_renderEngine));
-
-    // Initialize ground plane render buffer
-    initGroundPlaneRenderBuffer();
-
-    // Initialize bounding box render buffer for object detection
-    initBoundingBoxRenderBuffer();
-
-    std::cout << "Rendering system initialized" << std::endl;
-}
+// Removed initRendering() - producer has no rendering code
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 void InterLidarICP::initLogging()
@@ -1026,67 +818,7 @@ bool InterLidarICP::initializeObjectDetection() {
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::initBoundingBoxRenderBuffer()
-{
-    if (!m_objectDetectionEnabled) {
-        return;
-    }
-    
-    // Create render buffer for bounding box lines
-    // Each box has 12 edges, each edge has 2 vertices
-    uint32_t maxBoxes = 100;  // Maximum number of boxes we expect to render
-    uint32_t verticesPerBox = 24;  // 12 edges * 2 vertices per edge
-    uint32_t totalVertices = maxBoxes * verticesPerBox;
-    
-    // Only create render buffer if rendering is available
-    if (m_renderEngine != DW_NULL_HANDLE) {
-        CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_boxLineBuffer,
-                                                   DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-                                                   sizeof(dwVector3f),
-                                                   0,
-                                                   totalVertices,
-                                                   m_renderEngine));
-    }
-    
-    std::cout << "Bounding box render buffer initialized with " << totalVertices << " vertices" << std::endl;
-    
-    // AARCH64-SPECIFIC: CUDA-native line buffer initialization
-    #ifdef __aarch64__
-    dwVector3f* vertices = nullptr;
-    uint32_t bufferSizeBytes = totalVertices * sizeof(dwVector3f);
-    
-    std::cout << "[BBOX-CUDA-NATIVE] Performing initial line buffer clear..." << std::endl;
-    
-    // Map buffer immediately after creation
-    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(m_boxLineBuffer,
-                                            reinterpret_cast<void**>(&vertices),
-                                            0,
-                                            bufferSizeBytes,
-                                            DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-                                            m_renderEngine));
-    
-    // AARCH64-SPECIFIC: Enhanced buffer clearing for cache coherency
-    // Step 1: CPU clears the mapped buffer
-    memset(vertices, 0, bufferSizeBytes);
-    
-    // Step 2: Write sentinel pattern for debugging
-    for (uint32_t i = 0; i < totalVertices; i++) {
-        vertices[i] = {0.0f, 0.0f, -999.0f};  // Sentinel value for debugging
-    }
-    
-    // Step 3: CUDA-native memory barrier
-    CHECK_CUDA_ERROR(cudaEventRecord(m_cpuWriteCompleteEvent, m_memoryCoherencyStream));
-    CHECK_CUDA_ERROR(cudaStreamSynchronize(m_memoryCoherencyStream));
-    
-    std::cout << "  Line buffer cleared and initialized with CUDA-native synchronization" << std::endl;
-    
-    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(m_boxLineBuffer,
-                                              DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-                                              m_renderEngine));
-    
-    std::cout << "[BBOX-CUDA-NATIVE] Line buffer initialization complete" << std::endl;
-    #endif
-}
+// Removed initBoundingBoxRenderBuffer() - producer has no rendering code
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 bool InterLidarICP::onInitialize()
@@ -1099,10 +831,10 @@ bool InterLidarICP::onInitialize()
         initICP();
         initStitching();
         initGroundPlaneExtraction();
-        initRendering();
+        // SKIP: initRendering() - removed (producer has no rendering)
         initLogging();
 
-        inspectRenderBuffers();  // Debug buffer state
+        // SKIP: inspectRenderBuffers() - removed (producer has no render buffers)
         
         // Initialize object detection
         if (!initializeObjectDetection()) {
@@ -1110,9 +842,8 @@ bool InterLidarICP::onInitialize()
             return false;
         }
 
-        if (m_freeSpaceEnabled) {
-            initFreeSpaceRendering();
-        }
+        // SKIP: initFreeSpaceRendering() - removed (producer has no rendering)
+        // Free space calculation still happens, just no rendering
 
         // Skip initial frames for sensor stabilization
         std::cout << "Skipping " << m_skipFrames << " initial frames for sensor stabilization..." << std::endl;
@@ -2721,7 +2452,9 @@ void InterLidarICP::printObjectDetectionStatistics() {
 //     dwRenderEngine_renderBuffer(m_groundPlaneRenderBufferId, vertexIndex, m_renderEngine);
 // }
 
-void InterLidarICP::renderGroundPlane()
+// Removed renderGroundPlane() - producer has no rendering code
+#if 0
+void InterLidarICP::renderGroundPlane_OLD()
 {
     // Check if ground plane visualization is enabled
     if (!m_groundPlaneVisualizationEnabled) {
@@ -2943,9 +2676,13 @@ void InterLidarICP::renderGroundPlane()
         std::cout << "Ground plane rendered with EXACT " << vertexIndex << " vertices (CUDA-native coherency)" << std::endl;
     }
 }
+#endif
+// END OF REMOVED renderGroundPlane()
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::renderBoundingBoxes()
+// Removed renderBoundingBoxes() - producer has no rendering code
+#if 0
+void InterLidarICP::renderBoundingBoxes_OLD()
 {
     if (!m_objectDetectionEnabled || m_currentBoxes.empty()) {
         return;
@@ -3227,9 +2964,13 @@ void InterLidarICP::renderBoundingBoxes()
         dwRenderEngine_renderText3D(text.second.c_str(), text.first, m_renderEngine);
     }
 }
+#endif
+// END OF REMOVED renderBoundingBoxes()
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::renderPointsInBox(const BoundingBox& box, const dwVector3f& position, float lidarHeight)
+// Removed renderPointsInBox() - producer has no rendering code
+#if 0
+void InterLidarICP::renderPointsInBox_OLD(const BoundingBox& box, const dwVector3f& position, float lidarHeight)
 {
     if (!m_stitchedPointsHost.points || m_stitchedPointsHost.size == 0) {
         return;
@@ -3278,6 +3019,8 @@ void InterLidarICP::renderPointsInBox(const BoundingBox& box, const dwVector3f& 
         dwRenderEngine_setPointSize(1.0f, m_renderEngine);
     }
 }
+#endif
+// END OF REMOVED renderPointsInBox()
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 void InterLidarICP::logICPResults()
@@ -3489,12 +3232,17 @@ void InterLidarICP::onProcess()
     #ifdef __aarch64__  // Orin platform
     // Force GPU-CPU memory coherency on Tegra
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
-    std::cout << "[ORIN-DEBUG] Forced GPU sync at end of frame " << m_frameNum << std::endl;
+    // Debug log only in verbose mode
+    if (m_verbose) {
+        std::cout << "[ORIN-DEBUG] Forced GPU sync at end of frame " << m_frameNum << std::endl;
+    }
     #endif
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::copyToRenderBuffer(uint32_t renderBufferId, uint32_t offset, const dwPointCloud& pointCloud)
+// Removed copyToRenderBuffer() - producer has no rendering code
+#if 0
+void InterLidarICP::copyToRenderBuffer_OLD(uint32_t renderBufferId, uint32_t offset, const dwPointCloud& pointCloud)
 {
     // Copy only actual points; copying capacity could leave stale vertices visible
     uint32_t sizeInBytes = pointCloud.size * sizeof(dwVector4f);
@@ -3515,7 +3263,10 @@ void InterLidarICP::copyToRenderBuffer(uint32_t renderBufferId, uint32_t offset,
     // ZERO OUT BUFFER FIRST ON ORIN
     #ifdef __aarch64__
     memset(dataToRender, 0, sizeInBytes);
-    std::cout << "[ORIN-DEBUG] Cleared point cloud buffer (" << pointCloud.size << " points, " << sizeInBytes << " bytes)" << std::endl;
+    // Debug log only in verbose mode
+    if (m_verbose) {
+        std::cout << "[ORIN-DEBUG] Cleared point cloud buffer (" << pointCloud.size << " points, " << sizeInBytes << " bytes)" << std::endl;
+    }
     #endif
 
     CHECK_CUDA_ERROR(cudaMemcpy(dataToRender, pointCloud.points,
@@ -3525,9 +3276,13 @@ void InterLidarICP::copyToRenderBuffer(uint32_t renderBufferId, uint32_t offset,
                                DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
                                m_renderEngine);
 }
+#endif
+// END OF REMOVED copyToRenderBuffer()
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::renderPointCloud(uint32_t renderBufferId,
+// Removed renderPointCloud() - producer has no rendering code
+#if 0
+void InterLidarICP::renderPointCloud_OLD(uint32_t renderBufferId,
                                      uint32_t tileId,
                                      uint32_t offset,
                                      dwRenderEngineColorRGBA color,
@@ -3550,9 +3305,13 @@ void InterLidarICP::renderPointCloud(uint32_t renderBufferId,
     // Transfer to GL buffer
     copyToRenderBuffer(renderBufferId, offset, pointCloud);
 }
+#endif
+// END OF REMOVED renderPointCloud()
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-void InterLidarICP::renderTexts(const char* msg, const dwVector2f& location)
+// Removed renderTexts() - producer has no rendering code
+#if 0
+void InterLidarICP::renderTexts_OLD(const char* msg, const dwVector2f& location)
 {
     // Skip if rendering is not available (headless mode)
     if (m_renderEngine == DW_NULL_HANDLE) {
@@ -3583,8 +3342,11 @@ void InterLidarICP::renderTexts(const char* msg, const dwVector2f& location)
     CHECK_DW_ERROR(dwRenderEngine_setState(&previousDefaultState, m_renderEngine));
     CHECK_DW_ERROR(dwRenderEngine_setTile(previousTile, m_renderEngine));
 }
+#endif
+// END OF REMOVED renderTexts()
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
+// Removed onRender() - now inline empty in header
 // void InterLidarICP::onRender()
 // {
 //     // Clear buffer
@@ -3769,7 +3531,11 @@ void InterLidarICP::renderTexts(const char* msg, const dwVector2f& location)
 //     renderTexts(statsText.c_str(), {0.5f, 0.05f});
 // }
 
-void InterLidarICP::onRender()
+// Removed onRender() implementation - now inline empty in header
+// Producer has no rendering code - all visualization handled by consumer
+#if 0
+// OLD RENDERING CODE - REMOVED FOR PRODUCER
+void InterLidarICP::onRender_OLD()
 {
     
     // Clear buffer
@@ -3969,8 +3735,12 @@ void InterLidarICP::onRender()
     }
     #endif
 }
+#endif
+// END OF REMOVED RENDERING CODE
 
 
+// Removed inspectRenderBuffers() - producer has no render buffers
+#if 0
 void InterLidarICP::inspectRenderBuffers()
 {
     #ifdef __aarch64__
@@ -3999,18 +3769,17 @@ void InterLidarICP::inspectRenderBuffers()
     std::cout << "=================================" << std::endl;
     #endif
 }
+#endif
+// END OF REMOVED inspectRenderBuffers()
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
+// Removed onResizeWindow() rendering code - producer has no rendering
 void InterLidarICP::onResizeWindow(int width, int height)
 {
-    dwRenderEngine_reset(m_renderEngine);
-    dwRectf rect;
-    rect.width = width;
-    rect.height = height;
-    rect.x = 0;
-    rect.y = 0;
-    dwRenderEngine_setBounds(rect, m_renderEngine);
+    // Producer has no rendering - this function does nothing
+    (void)width;
+    (void)height;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4101,41 +3870,14 @@ void InterLidarICP::onRelease()
         m_runtime.reset();
     }
 
-    // COMMENTED OUT: Individual LiDAR render buffer destruction - only showing ICP alignment view
-    // Release render buffers
-    // Clean up rendering resources (only if render engine was initialized)
-    if (m_renderEngine != DW_NULL_HANDLE) {
-        // for (uint32_t i = 0; i < m_lidarCount; i++) {
-        //     dwRenderEngine_destroyBuffer(m_lidarTiles[i].renderBufferId, m_renderEngine);
-        // }
-        if (m_icpTile.renderBufferId != 0) {
-            dwRenderEngine_destroyBuffer(m_icpTile.renderBufferId, m_renderEngine);
-        }
-        // Stitched view buffer destruction commented out - buffer was not created
-        // dwRenderEngine_destroyBuffer(m_stitchedTile.renderBufferId, m_renderEngine);
-        if (m_groundPlaneRenderBufferId != 0) {
-            dwRenderEngine_destroyBuffer(m_groundPlaneRenderBufferId, m_renderEngine);
-        }
-        
-        if (m_objectDetectionEnabled && m_boxLineBuffer != 0) {
-            dwRenderEngine_destroyBuffer(m_boxLineBuffer, m_renderEngine);
-        }
-
-        if (m_freeSpaceEnabled && m_freeSpaceRenderBufferId != 0) {
-            dwRenderEngine_destroyBuffer(m_freeSpaceRenderBufferId, m_renderEngine);
-        }
-
-        // Release render engine
-        dwRenderEngine_release(m_renderEngine);
-    }
+    // Removed all rendering cleanup - producer has no rendering code
+    // No render buffers, no render engine, no visualization context
 
     // Release DriveWorks and SAL
     if (m_sal) {
         dwSAL_release(m_sal);
     }
-    if (m_viz) {
-        dwVisualizationRelease(m_viz);
-    }
+    // Removed visualization release - producer has no visualization
     if (m_context) {
         dwRelease(m_context);
     }

@@ -26,8 +26,7 @@
 #include <dw/sensors/lidar/Lidar.h>
 #include <dw/sensors/sensormanager/SensorManager.h>
 
-#include <dwvisualization/core/RenderEngine.h>
-#include <dwvisualization/core/Visualization.h>
+// Removed visualization includes - producer has no rendering code
 #include "FreeSpaceDW.hpp"
 
 // TensorRT includes for object detection
@@ -148,11 +147,11 @@ private:
     // DriveWorks Handles
     // ------------------------------------------------
     dwContextHandle_t m_context = DW_NULL_HANDLE;
-    dwVisualizationContextHandle_t m_viz = DW_NULL_HANDLE;
     dwSALHandle_t m_sal = DW_NULL_HANDLE;
     dwRigHandle_t m_rigConfig = DW_NULL_HANDLE;
     dwSensorManagerHandle_t m_sensorManager = DW_NULL_HANDLE;
-    dwRenderEngineHandle_t m_renderEngine = DW_NULL_HANDLE;
+    
+    // Removed visualization handles - producer has no rendering code
     
     // Point Cloud Processing Handles
     dwPointCloudAccumulatorHandle_t m_accumulator[NUM_LIDARS] = {DW_NULL_HANDLE};
@@ -301,6 +300,7 @@ private:
     // ------------------------------------------------
     
     // Initialization functions
+protected:
     void initDriveWorks();
     void initSensors();
     void initBuffers();
@@ -308,19 +308,19 @@ private:
     void initICP();
     void initStitching();
     void initGroundPlaneExtraction();
-    void initRendering();
+    // Removed initRendering() - producer has no rendering code
     void initLogging();
     
     // Object detection initialization
+protected:
     bool initializeObjectDetection();
     bool initializeTensorRT();
     void calculateInputRequirements();
 
-    void inspectRenderBuffers();
-
-    void initFreeSpaceRendering();
+    // Removed inspectRenderBuffers() - producer has no render buffers
+    // Removed initFreeSpaceRendering() - producer has no rendering code
     void performFreeSpaceDetection();
-    void renderFreeSpace();
+    // Removed renderFreeSpace() - producer has no rendering code
     
     // Processing functions
     bool getSpinFromBothLidars();
@@ -374,21 +374,15 @@ private:
     void printICPStatistics();
     void printObjectDetectionStatistics();
     
-    // Rendering functions
-    void renderPointCloud(uint32_t renderBufferId,
-                          uint32_t tileId,
-                          uint32_t offset,
-                          dwRenderEngineColorRGBA color,
-                          const dwPointCloud& pointCloud);
-    void copyToRenderBuffer(uint32_t renderBufferId, uint32_t offset, const dwPointCloud& pointCloud);
-    void renderTexts(const char* msg, const dwVector2f& location);
-    void renderGroundPlane();
-    void initGroundPlaneRenderBuffer();
-    
-    // Object detection rendering
-    void renderBoundingBoxes();
-    void renderPointsInBox(const BoundingBox& box, const dwVector3f& position, float lidarHeight);
-    void initBoundingBoxRenderBuffer();
+    // Removed all rendering functions - producer has no rendering code:
+    // - renderPointCloud()
+    // - copyToRenderBuffer()
+    // - renderTexts()
+    // - renderGroundPlane()
+    // - initGroundPlaneRenderBuffer()
+    // - renderBoundingBoxes()
+    // - renderPointsInBox()
+    // - initBoundingBoxRenderBuffer()
     
 public:
     ///------------------------------------------------------------------------------
@@ -417,9 +411,9 @@ public:
     void onProcess() override;
 
     ///------------------------------------------------------------------------------
-    /// Render loop
+    /// Render loop - empty implementation (producer has no rendering)
     ///------------------------------------------------------------------------------
-    void onRender() override;
+    void onRender() override { /* Producer has no rendering code */ }
     
     ///------------------------------------------------------------------------------
     /// Handle window resize
