@@ -237,20 +237,129 @@ private:
         // Handle CAN data synchronization
         dwVehicleIOSafetyState safetyState;
         dwVehicleIONonSafetyState nonSafetyState;
-        if (m_canParser->getTemporallySynchronizedState(&safetyState, &nonSafetyState)) {
+        dwVehicleIOActuationFeedback actuationFeedback;
+
+        if (m_canParser->getTemporallySynchronizedState(&safetyState, &nonSafetyState, &actuationFeedback)) {
+        
+            char diagBuf[1024];
+            sprintf(diagBuf, 
+                "═══════════════════════════════════════════\n"
+                " VehicleIO State Before Egomotion:\n"
+                "─────────────────────────────────────────\n"
+                "SafetyState:\n"
+                "  steeringWheelAngle: %.3f rad (%.1f°)\n"
+                "  timestamp_us: %lu\n"
+                "  size: %u\n"
+                "─────────────────────────────────────────\n"
+                "NonSafetyState:\n"
+                "  speedESC: %.3f m/s (%.1f km/h)\n"
+                "  speedDirection: %d\n"
+                "  wheelSpeed[FL]: %.3f rad/s\n"
+                "  wheelSpeed[FR]: %.3f rad/s\n"
+                "  wheelSpeed[RL]: %.3f rad/s\n"
+                "  wheelSpeed[RR]: %.3f rad/s\n"
+                "  wheelTicksTimestamp[FL]: %lu\n"
+                "  wheelTicksTimestamp[FR]: %lu\n"
+                "  wheelTicksTimestamp[RL]: %lu\n"
+                "  wheelTicksTimestamp[RR]: %lu\n"
+                "  frontSteeringAngle: %.3f rad\n"
+                "  frontSteeringTimestamp: %lu\n"
+                "  timestamp_us: %lu\n"
+                "  size: %u\n"
+                "─────────────────────────────────────────\n"
+                "ActuationFeedback:\n"
+                "  wheelSpeed[RL]: %.3f rad/s\n"
+                "  wheelSpeed[RR]: %.3f rad/s\n"
+                "  timestamp_us: %lu\n"
+                "  size: %u\n"
+                "═══════════════════════════════════════════\n",
+                safetyState.steeringWheelAngle, safetyState.steeringWheelAngle * 180.0f / M_PI,
+                safetyState.timestamp_us,
+                safetyState.size,
+                nonSafetyState.speedESC, nonSafetyState.speedESC * 3.6f,
+                (int)nonSafetyState.speedDirectionESC,
+                nonSafetyState.wheelSpeed[0],
+                nonSafetyState.wheelSpeed[1],
+                nonSafetyState.wheelSpeed[2],
+                nonSafetyState.wheelSpeed[3],
+                nonSafetyState.wheelTicksTimestamp[0],
+                nonSafetyState.wheelTicksTimestamp[1],
+                nonSafetyState.wheelTicksTimestamp[2],
+                nonSafetyState.wheelTicksTimestamp[3],
+                nonSafetyState.frontSteeringAngle,
+                nonSafetyState.frontSteeringTimestamp,
+                nonSafetyState.timestamp_us,
+                nonSafetyState.size,
+                actuationFeedback.wheelSpeed[2],
+                actuationFeedback.wheelSpeed[3],
+                actuationFeedback.timestamp_us,
+                actuationFeedback.size);
+            printColored(stdout, COLOR_GREEN, diagBuf);
+            
+            // Validate before sending to egomotion
+            bool isValid = true;
+            if (nonSafetyState.speedESC < 0.0f || nonSafetyState.speedESC > 100.0f) {
+                printColored(stdout, COLOR_RED, " Invalid speedESC!\n");
+                isValid = false;
+            }
+            if (nonSafetyState.size != sizeof(dwVehicleIONonSafetyState)) {
+                printColored(stdout, COLOR_RED, " Invalid NonSafetyState size!\n");
+                isValid = false;
+            }
+            if (safetyState.size != sizeof(dwVehicleIOSafetyState)) {
+                printColored(stdout, COLOR_RED, " Invalid SafetyState size!\n");
+                isValid = false;
+            }
+            if (actuationFeedback.size != sizeof(dwVehicleIOActuationFeedback)) {
+                printColored(stdout, COLOR_RED, " Invalid ActuationFeedback size!\n");
+                isValid = false;
+            }
+            
+            if (!isValid) {
+                printColored(stdout, COLOR_RED, " Skipping invalid VehicleIO state\n");
+                return false;
+            }
+            
             if (nonSafetyState.speedESC >= 0.0f && nonSafetyState.speedESC < 100.0f) {
-                CHECK_DW_ERROR(dwEgomotion_addVehicleIOState(&safetyState, &nonSafetyState, nullptr, m_egomotion));
+                CHECK_DW_ERROR(dwEgomotion_addVehicleIOState(&safetyState, &nonSafetyState, &actuationFeedback, m_egomotion));
                 
-                // Rate-limited logging
-                static dwTime_t lastCommitLog = 0;
-                if (allowEvery(anchorTimestamp, lastCommitLog, 200000)) {
-                    char buf[256];
-                    sprintf(buf, "✓ Temporal fusion complete: GPS=%.6f°,%.6f°, Speed=%.2f m/s, Steering=%.1f°\n",
-                            gpsFrame.latitude, gpsFrame.longitude,
-                            nonSafetyState.speedESC, safetyState.steeringWheelAngle * 180.0f / M_PI);
-                    printColored(stdout, COLOR_GREEN, buf);
+                static dwTime_t lastDebugLog = 0;
+                if (allowEvery(anchorTimestamp, lastDebugLog, 1000000)) {  // Every 1 second
+                    char buf[512];
+                    sprintf(buf, " Egomotion Input Debug:\n"
+                                "  Wheel Speeds: FL=%.2f, FR=%.2f, RL=%.2f, RR=%.2f rad/s\n"
+                                "  Wheel Times: FL=%lu, FR=%lu, RL=%lu, RR=%lu\n"
+                                "  Steering: %.3f rad (%.1f°)\n"
+                                "  Speed (ESC): %.2f m/s\n"
+                                "  Main Timestamp: %lu µs\n",
+                            nonSafetyState.wheelSpeed[0], nonSafetyState.wheelSpeed[1],
+                            nonSafetyState.wheelSpeed[2], nonSafetyState.wheelSpeed[3],
+                            nonSafetyState.wheelTicksTimestamp[0], nonSafetyState.wheelTicksTimestamp[1],
+                            nonSafetyState.wheelTicksTimestamp[2], nonSafetyState.wheelTicksTimestamp[3],
+                            safetyState.steeringWheelAngle, safetyState.steeringWheelAngle * 180.0f / M_PI,
+                            nonSafetyState.speedESC,
+                            nonSafetyState.timestamp_us);
+                    printColored(stdout, COLOR_DEFAULT, buf);
                 }
             }
+
+            dwEgomotionResult estimate;
+            dwStatus estStatus = dwEgomotion_getEstimation(&estimate, m_egomotion);
+
+            char estBuf[512];
+            sprintf(estBuf,
+                " Egomotion Estimation Status: %s\n"
+                "  validFlags: 0x%08X\n"
+                "  timestamp: %lu\n"
+                "  linearVelocity: [%.3f, %.3f, %.3f]\n"
+                "  angularVelocity: [%.3f, %.3f, %.3f]\n",
+                dwGetStatusName(estStatus),
+                estimate.validFlags,
+                estimate.timestamp,
+                estimate.linearVelocity[0], estimate.linearVelocity[1], estimate.linearVelocity[2],
+                estimate.angularVelocity[0], estimate.angularVelocity[1], estimate.angularVelocity[2]);
+            printColored(stdout, COLOR_YELLOW, estBuf);
+
         }
         
         m_temporalBuffers.lastProcessedTimestamp = anchorTimestamp;
@@ -350,8 +459,24 @@ private:
     
     
     void drainSensorEventsToBuffers() {
-            // Short drainage budget to prevent starvation (500μs vs original 2ms)
-            auto budgetEnd = std::chrono::steady_clock::now() + std::chrono::microseconds(500);
+        static uint32_t canCount = 0, imuCount = 0, gpsCount = 0;
+        static dwTime_t lastReport = 0;
+        
+        dwTime_t now = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        if (now - lastReport > 1000000) {  // Every 1 second
+            char buf[256];
+            sprintf(buf, "📡 Sensor Events (last 1s): CAN=%u, IMU=%u, GPS=%u\n",
+                    canCount, imuCount, gpsCount);
+            printColored(stdout, COLOR_YELLOW, buf);
+            canCount = imuCount = gpsCount = 0;
+            lastReport = now;
+        }    
+        
+        
+        // Short drainage budget to prevent starvation (500μs vs original 2ms)
+            auto budgetEnd = std::chrono::steady_clock::now() + std::chrono::microseconds(5000);
             int drained = 0;
             
             // Batch updates to reduce mutex contention
@@ -359,7 +484,7 @@ private:
             std::vector<std::pair<dwTime_t, dwIMUFrame>> imuUpdates;
             std::vector<std::pair<dwTime_t, dwCANMessage>> canUpdates;
             
-            while (!isPaused() && drained < 32) {
+            while (!isPaused() && drained < 128) {
                 if (std::chrono::steady_clock::now() >= budgetEnd) {
                     break;
                 }
@@ -393,11 +518,13 @@ private:
                         if (acquiredEvent->sensorIndex == m_gpsSensorIdx) {
                             gpsUpdates.emplace_back(timestamp, acquiredEvent->gpsFrame);
                         }
+                        gpsCount++;
                         break;
                     case DW_SENSOR_IMU:
                         if (acquiredEvent->sensorIndex == m_imuSensorIdx) {
                             imuUpdates.emplace_back(timestamp, acquiredEvent->imuFrame);
                         }
+                        imuCount++;
                         break;
                     case DW_SENSOR_CAN:
                         if (acquiredEvent->sensorIndex == m_vehicleSensorIdx) {
@@ -411,6 +538,7 @@ private:
                                 lastTimeoutCheck = timestamp;
                             }
                         }
+                        canCount++;
                         break;
                     case DW_SENSOR_CAMERA:
                         // Camera processing remains immediate
@@ -481,7 +609,6 @@ private:
     void bufferIMUData(const dwIMUFrame& imuFrame) {
         dwTime_t timestamp = imuFrame.timestamp_us;
         
-        // NVIDIA requirement: ignore non-monotonic timestamps
         if (timestamp <= m_temporalBuffers.lastIMUTimestamp) {
             return; // Silently ignore (IMU data is high-frequency)
         }
@@ -712,7 +839,7 @@ public:
         {
             CHECK_DW_ERROR(dwSAL_initialize(&m_sal, m_context));
 
-            dwStatus status = dwSensorManager_initializeFromRigWithParams(&m_sensorManager, m_rigConfig, &smParams, 64, m_sal);
+            dwStatus status = dwSensorManager_initializeFromRigWithParams(&m_sensorManager, m_rigConfig, &smParams, 128, m_sal);
             if (status != DW_SUCCESS)
             {
                 logError("Error initializing SensorManager for real-time processing: %s\n", dwGetStatusName(status));
@@ -1432,7 +1559,7 @@ public:
 
 private:
     /**
-     * Pose estimation and trajectory building (extracted from original onProcess)
+     * Pose estimation and trajectory building (extracted from sample_egomotion onProcess)
      */
     void performPoseEstimationAndTrajectory() {
         dwEgomotionResult estimate;

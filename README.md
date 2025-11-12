@@ -51,20 +51,14 @@ Halo is a cutting-edge startup focused on developing advanced autonomous driving
 This repository serves as the primary source code storage for HMAP's perception modules and proprietary drivers. The codebase is organized for reference and development purposes.
 
 ### Directory Structure
-- **`/src/`** - Core perception module source code
-- **`/drivers/`** - Hardware abstraction layer and sensor drivers  
-- **`/include/`** - Public API headers and interfaces
-- **`/config/`** - Configuration templates and schemas
-- **`/docs/`** - Technical documentation and specifications
-- **`/tests/`** - Unit and integration test suites
+- **`/dataandrig/`** - cotnains jsons for sensor and vehcile suite with their respective transformations 
+- **`/logs/`** - application specific log preservation directory 
+- **`/modules/`** - Public API headers and interfaces for each module 
+- **`/plugins/`** - Drivers and plugins for custom sensors and applications 
+- **`/py-postprocessed/`** - contains skeleton implimentations of post-postprocessing needed to be ported into native APIs (for debug purposed on DL models)
+- **`/standaloneapps/`** - Unit applications in each sensor category suite (full functional application in native APIs)
 
 ## Source Code Documentation
-
-### Core Components
-- **Perception API** - Main interface definitions for perception processing
-- **Sensor Manager** - Hardware sensor abstraction and management layers
-- **Data Pipeline** - Streaming data processing and buffering implementations
-- **Calibration API** - Sensor calibration and alignment utilities
 
 ### Module Architecture
 The source code is organized into distinct modules that handle specific aspects of the autonomous driving perception stack:
@@ -87,19 +81,13 @@ The source code is organized into distinct modules that handle specific aspects 
 HMAP's perception system is built on a modular architecture optimized for real-time processing on NVIDIA Drive AGX Orin hardware. The source code implements advanced computer vision algorithms and sensor fusion techniques using DriveWorks APIs for maximum performance and reliability.
 
 ## Contributing
+Contributions are accepted from Halo engineers forking the main branch and pushing code to their native branches, the API mis-matches are verified by @atharv-sharma and acccepted to the production by @sudoashwin, this cycle is performed every 10th of the month. 
 
 ### Development Guidelines
 - Follow Halo's coding standards (see [CODING_STANDARDS.md](CODING_STANDARDS.md) (to be provided))
 - All commits must pass CI/CD pipeline
 - Safety-critical code requires additional review
 - Performance regressions are not acceptable
-
-### Contribution Process
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to the branch (`git push origin feature/amazing-feature`)
-5. **Open** a Pull Request
 
 ## Security & Compliance
 
@@ -116,9 +104,9 @@ This repository contains proprietary and confidential information. Access is res
 
 ## License
 
-This software is proprietary and confidential to Halo. Unauthorized reproduction, distribution, or reverse engineering is strictly prohibited.
+This software is proprietary and confidential to Halo corporation. Unauthorized reproduction, distribution, or reverse engineering is strictly prohibited.
 
-**Copyright © 2024 Halo. All rights reserved.**
+**Copyright © 2025 Halo. All rights reserved.**
 
 ---
 
@@ -126,6 +114,7 @@ This software is proprietary and confidential to Halo. Unauthorized reproduction
 
 | Version | Release Date | Key Features |
 |---------|-------------|--------------|
+| v2.2.0  | 2025-11-04  | Core perecption algorithms are ready for realtime detections |
 | v2.1.0  | 2024-09-15  | Enhanced LiDAR integration, performance optimizations |
 | v2.0.0  | 2025-07-01  | Major architecture refactor, DriveWorks 6.0.10 support |
 | v1.5.0  | 2025-03-15  | Multi-camera support, improved latency |
