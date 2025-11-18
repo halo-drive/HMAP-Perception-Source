@@ -1,0 +1,1 @@
+This PDF documents the closed-loop wiring harness, which uses CAN6 and CAN5 channels to capture logs from both the vehicle CAN bus and the drive-by-wire CAN bus.
