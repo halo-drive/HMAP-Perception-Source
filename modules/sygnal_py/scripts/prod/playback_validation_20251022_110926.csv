@@ -1,2 +1,0 @@
-timestamp,cumulative_distance_m,target_angle_deg,commanded_steering_pct,commanded_brake_pct,measured_angle_deg,measured_speed_mps,angle_error_deg,distance_error_m,estimated_x_m,estimated_y_m,estimated_heading_deg
-1761127766.3933928,0.0,-1.7000000000000002,0.42500000000000004,0.0,-4.3,0.0,-2.5999999999999996,0.0,0.0,0.0,0.0

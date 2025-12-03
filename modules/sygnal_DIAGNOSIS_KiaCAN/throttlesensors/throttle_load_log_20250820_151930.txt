@@ -1,0 +1,8 @@
+Throttle & Load Monitor Log
+Started: 2025-08-20T15:19:30.886309
+Interface: can3
+Engine Management Throttle & Load Analysis
+================================================================================
+
+[2025-08-20T15:19:30.887195] Throttle & Load Monitor started on can3
+[2025-08-20T15:19:52.700803] Monitoring stopped - Processed 0 messages

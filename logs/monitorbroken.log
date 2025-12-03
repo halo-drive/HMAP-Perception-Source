@@ -1,0 +1,52 @@
+benchdev@tegra-ubuntu:/usr/local/driveworks/bin$ ./sample_lidar_replay 
+ProgramArguments: Missing argument 'dwTracePath' requested
+GLFW error: 65544, X11: RandR monitor support seems broken
+Starting my sample application...
+[12-11-2025 11:20:21] Platform: Detected Drive Orin P3710
+[12-11-2025 11:20:22] Adding variable DW_Base:DW_Version
+[12-11-2025 11:20:22] Added variable DW_Base:DW_Version
+[12-11-2025 11:20:22] Platform: number of GPU devices detected 1
+[12-11-2025 11:20:22] Platform: currently selected GPU device 0, Resource Data Dir: trt_08_06_12_04, Arch: ga10b
+[12-11-2025 11:20:22] Platform: currently selected GPU device integrated ID 0
+[12-11-2025 11:20:22] CUDLAEngine:getDLACount: CUDLA version is = 1004000
+[12-11-2025 11:20:22] CUDLAEngine:getDLACount: Number of DLA devices = 2
+[12-11-2025 11:20:22] Context::mountResourceCandidateDataPath resource FAILED to mount from './resources': VirtualFileSystem: Failed to mount './resources/resources.pak'
+[12-11-2025 11:20:22] Context::mountResourceCandidateDataPath resource FAILED to mount from '/usr/local/driveworks-5.20/bin/data': VirtualFileSystem: Failed to mount '/usr/local/driveworks-5.20/bin/data/resources.pak'
+[12-11-2025 11:20:22] Context::findDataRootInPathWalk data/DATA_ROOT found at: /usr/local/driveworks-5.20/bin/../data
+[12-11-2025 11:20:22] Context::mountResourceCandidateDataPath resource FAILED to mount from '/usr/local/driveworks-5.20/bin/../data': VirtualFileSystem: Failed to mount '/usr/local/driveworks-5.20/bin/../data/resources.pak'
+[12-11-2025 11:20:22] Context::findDataRootInPathWalk data/DATA_ROOT found at: /usr/local/driveworks-5.20/data
+[12-11-2025 11:20:22] Context::mountResourceCandidateDataPath resource FAILED to mount from '/usr/local/driveworks-5.20/data': VirtualFileSystem: Failed to mount '/usr/local/driveworks-5.20/data/resources.pak'
+[12-11-2025 11:20:22] Context::findResourcesPackageInPathWalk: Could not find ./resources/resources.pak in upto 7 parent directories from /usr/local/driveworks-5.20/bin/../lib/libdw_base.so.5.20
+[12-11-2025 11:20:22] Context::findResourcesPackageInPathWalk: Could not find ./resources/resources.pak in upto 7 parent directories from /usr/local/driveworks-5.20/targets/aarch64-Linux/lib/libdw_base.so.5.20
+[12-11-2025 11:20:22] SDK: No resources(.pak) mounted, some modules will not function properly
+[12-11-2025 11:20:22] [12-11-2025 11:20:22] Initialize DriveWorks SDK v5.20.24
+[12-11-2025 11:20:22] [12-11-2025 11:20:22] Release build with GNU 9.3.0 from buildbrain-branch-0-gb4c0b405b15 against Drive PDK v6.0.10.0
+[12-11-2025 11:20:22] SensorFactory::createSensor() -> time.nvpps, nvpps-device=/dev/nvpps0
+[12-11-2025 11:20:22] Found driver: time.nvpps
+[12-11-2025 11:20:22] Can not create time sensor: DW_HAL_CANNOT_OPEN_CHANNEL: EndpointNVPPS: cannot open NVPPS device with name: /dev/nvpps0
+ Error: Permission denied
+[12-11-2025 11:20:22] SensorFactory::loadPluginLibraryHelper:Succeed to load dynamic lib - /usr/local/driveworks-5.20/bin/../lib/libsensor_plugin_public_radar.so
+[12-11-2025 11:20:22] SensorFactory::createSensor() -> lidar.virtual, file=/usr/local/driveworks-5.20/data/samples/sensors/lidar/hesai-P128-dual_v6_codecs.bin
+[12-11-2025 11:20:22] Found driver: lidar.virtual
+[12-11-2025 11:20:22] Seek file /usr/local/driveworks-5.20/data/samples/sensors/lidar/hesai-P128-dual_v6_codecs.bin.seek: seek table with 7301 entries covering 233617 events ranging from 1625262407592677 to 1625262414083542 usecs
+[12-11-2025 11:20:22] LegacyLidarDemuxer: hfov-start is empty, default value 0 will be used
+[12-11-2025 11:20:22] LegacyLidarDemuxer: hfov-end is empty, default value 360 will be used
+[12-11-2025 11:20:22] DemuxerHesaiP128, hfov-start is empty,  default value 0 will be used
+[12-11-2025 11:20:22] DemuxerHesaiP128, hfov-end is empty, default value 360 will be used
+[12-11-2025 11:20:22] Initialize DriveWorks VisualizationSDK v5.20.24
+[12-11-2025 11:20:22] Initialize DriveWorksGL SDK v5.20.24
+[12-11-2025 11:20:22] egl::Display: found 1 EGL devices
+[12-11-2025 11:20:22] egl::Display: use drm device: /dev/dri/card0
+12/11/2025 11:20:22 copy_tiles: allocating first_line at size 61
+12/11/2025 11:20:22 client 1 network rate 4555.1 KB/sec (283687.8 eff KB/sec)
+12/11/2025 11:20:22 client 1 latency:  0.7 ms
+12/11/2025 11:20:22 dt1: 0.0101, dt2: 0.0018 dt3: 0.0007 bytes: 52615
+12/11/2025 11:20:22 link_rate: LR_LAN - 1 ms, 4555 KB/s
+^CTiming results:
+Thread main:
+-onProcess                CPU:   nanus, std= 540       | GPU:   nanus, std= 542       | samples=50097
+-onRender                 CPU:   146us, std= 558       | GPU:   145us, std= 567       | samples=74
+
+[12-11-2025 11:20:23] Driveworks VisualizationSDK released
+[12-11-2025 11:20:23] [12-11-2025 11:20:23] Releasing Driveworks SDK Context
+[12-11-2025 11:20:23] DriveworksGL SDK released
