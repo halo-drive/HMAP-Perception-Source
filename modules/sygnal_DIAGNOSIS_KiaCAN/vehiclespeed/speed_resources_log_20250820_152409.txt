@@ -1,0 +1,8 @@
+Speed Resources Monitor Log
+Started: 2025-08-20T15:24:09.686072
+Interface: can3
+Multi-Source Vehicle Speed Validation
+================================================================================
+
+[2025-08-20T15:24:09.687056] Speed Resources Monitor started on can3
+[2025-08-20T15:25:00.204663] Monitoring stopped - EMS11: 0, CLU11: 2527

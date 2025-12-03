@@ -1,0 +1,1 @@
+timestamp,can_id,message_count,vehicle_speed_kmh,engine_running,ignition_switch,puc_status,ac_relay,engine_rpm,torque_indicated,torque_friction,throttle_position,accelerator_pedal,raw_data_hex
