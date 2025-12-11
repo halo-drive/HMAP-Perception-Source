@@ -1,5 +1,0 @@
-./lidar_object_detection_ipc_visualization --ip=127.0.0.1 --port=40002 > /usr/local/driveworks-5.20/samples/src/sensors/lidar/lidar_object_detection_ipc_visualization/consumer_logs.txt 2>&1
-
-
-
-./lidar_object_detection_ipc_visualization --ip=127.0.0.1 --port=40002 

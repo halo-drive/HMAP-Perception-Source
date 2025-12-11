@@ -1,4 +1,4 @@
-project(lidar_object_detection_ipc_visualization)
+project(lidar_object_detection_ipc_client)
 
 #-------------------------------------------------------------------------------
 # Project files

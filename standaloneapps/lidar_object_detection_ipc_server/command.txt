@@ -1,0 +1,1 @@
+./lidar_object_detection_ipc_server --rigFile='/home/benchdev2/rig/lidar_rig/rig.json' --tensorRTEngine='/home/benchdev2/lidar_models/model.engine' --port=40002<or your own> --offscreen=1

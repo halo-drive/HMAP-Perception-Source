@@ -1,4 +1,4 @@
-project(lidar_object_detection_interprocess_communiation)
+project(lidar_object_detection_ipc_server)
 
 #-------------------------------------------------------------------------------
 # Detect architecture
