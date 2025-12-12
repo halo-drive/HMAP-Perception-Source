@@ -1,0 +1,1 @@
+this aplication is used to visualize livox hap sensor data. to be used after compiling livox hap sensor plugin

@@ -15,6 +15,7 @@
 
 // DriveWorks
 #include <dw/core/base/Version.h>
+#include <dw/core/base/Status.h>
 #include <dw/core/context/Context.h>
 #include <dw/core/logger/Logger.h>
 #include <dw/sensors/common/Sensors.h>
@@ -97,9 +98,9 @@ public:
         : DriveWorksSample(args) {}
     
     bool onInitialize() override {
-        // Initialize logger
+        // Initialize logger - reduce noise from DriveWorks internal warnings
         CHECK_DW_ERROR(dwLogger_initialize(getConsoleLoggerCallback(true)));
-        CHECK_DW_ERROR(dwLogger_setLogLevel(DW_LOG_VERBOSE));
+        CHECK_DW_ERROR(dwLogger_setLogLevel(DW_LOG_WARN)); // Changed from VERBOSE to WARN to reduce noise
         
         // Initialize SDK context
         dwContextParameters sdkParams = {};
@@ -121,8 +122,13 @@ public:
             return false;
         }
         
+        // Set process rate to 5-6 FPS to prevent blocking and ensure smooth operation
+        setProcessRate(6);  // 6 FPS for processing
+        setRenderRate(30);  // 30 FPS for rendering (smooth visualization)
+        
         std::cout << "[DWFastLIO] System initialized successfully" << std::endl;
         std::cout << "[DWFastLIO] Mode: MAPPING" << std::endl;
+        std::cout << "[DWFastLIO] Process rate: 6 FPS, Render rate: 30 FPS" << std::endl;
         std::cout << "[DWFastLIO] Press 'M' to toggle MAPPING/LOCALIZATION mode" << std::endl;
         std::cout << "[DWFastLIO] Press 'S' to save map" << std::endl;
         std::cout << "[DWFastLIO] Press 'L' to load map" << std::endl;
@@ -246,130 +252,324 @@ public:
     }
     
     void onProcess() override {
-        // Read IMU
+        // Ultra-conservative processing: Only process minimal data per frame
+        // Target: 5-6 FPS, so we have ~166ms per frame, but keep processing very light
+        // IMPORTANT: feedLiDAR() conversion can block - we need to limit scan size or make it async
+        
+        // Read IMU - use reasonable timeout (DriveWorks samples use 10ms)
         if (m_imuSensor != DW_NULL_HANDLE) {
-            dwIMUFrame imuFrame;
-            dwStatus status = dwSensorIMU_readFrame(&imuFrame, 0, m_imuSensor); // Non-blocking
+            static int imu_read_attempts = 0;
+            static int imu_read_success = 0;
             
-            if (status == DW_SUCCESS) {
-                m_latestIMU = imuFrame;
-                m_hasIMU = true;
-                m_slam->feedIMU(imuFrame, imuFrame.hostTimestamp);
+            // Read multiple IMU frames per cycle to drain buffer
+            for (int i = 0; i < 10; ++i) { // Process up to 10 IMU frames max
+                dwIMUFrame imuFrame;
+                // Use 10ms timeout like DriveWorks IMU sample - IMU data comes at high frequency
+                dwStatus status = dwSensorIMU_readFrame(&imuFrame, 10000, m_imuSensor); // 10ms timeout
+                
+                imu_read_attempts++;
+                
+                if (status == DW_SUCCESS) {
+                    imu_read_success++;
+                    m_latestIMU = imuFrame;
+                    m_hasIMU = true;
+                    m_slam->feedIMU(imuFrame, imuFrame.hostTimestamp);
+                    
+                    // Log first few successful reads
+                    if (imu_read_success <= 5) {
+                        std::cout << "[DWFastLIO] IMU read SUCCESS #" << imu_read_success 
+                                  << " (attempts: " << imu_read_attempts << ")" << std::endl;
+                    }
+                } else if (status == DW_TIME_OUT || status == DW_NOT_READY || status == DW_NOT_AVAILABLE) {
+                    // Normal - no more IMU data available right now
+                    break;
+                } else {
+                    // Other error - log it
+                    if (imu_read_attempts <= 5) {
+                        std::cout << "[DWFastLIO] IMU read error: " << dwGetStatusName(status) 
+                                  << " (attempt #" << imu_read_attempts << ")" << std::endl;
+                    }
+                    break;
+                }
+            }
+        } else {
+            static bool warned = false;
+            if (!warned) {
+                std::cout << "[DWFastLIO] WARNING: IMU sensor handle is NULL!" << std::endl;
+                warned = true;
             }
         }
         
-        // Read GPS
+        // Read GPS - only process a few frames per cycle
         if (m_gpsSensor != DW_NULL_HANDLE && m_hasIMU) {
-            dwGPSFrame gpsFrame;
-            dwStatus status = dwSensorGPS_readFrame(&gpsFrame, 0, m_gpsSensor); // Non-blocking
-            
-            if (status == DW_SUCCESS) {
-                m_slam->feedGPS(gpsFrame, m_latestIMU, gpsFrame.timestamp_us);
+            for (int i = 0; i < 2; ++i) { // Process only 2 GPS frames max
+                dwGPSFrame gpsFrame;
+                dwStatus status = dwSensorGPS_readFrame(&gpsFrame, 0, m_gpsSensor); // Non-blocking
+                
+                if (status == DW_SUCCESS) {
+                    m_slam->feedGPS(gpsFrame, m_latestIMU, gpsFrame.timestamp_us);
+                } else {
+                    break; // No more data available
+                }
             }
         }
         
-        // Read LiDAR packets and accumulate full spin
+        // Read LiDAR packets - accumulate complete 360° scans (like DriveWorks lidar_replay sample)
+        // CRITICAL: Return packets IMMEDIATELY after copying to avoid queue overflow
+        // Fast-LIO expects complete scans, not individual packets
+        // Using CPU memory (dwLidarPointXYZI) - no GPU-CPU copy overhead
         if (m_lidarSensor != DW_NULL_HANDLE) {
-            const dwLidarDecodedPacket* packet;
-            dwStatus status = dwSensorLidar_readPacket(&packet, 100000, m_lidarSensor);
+            static int totalPacketsRead = 0;
+            static int totalScansComplete = 0;
+            static int packetsInCurrentScan = 0;
             
-            if (status == DW_SUCCESS) {
-                // Accumulate points
-                if (m_pointCloudSize + packet->nPoints <= m_pointCloudCapacity) {
-                    memcpy(&m_pointCloudBuffer[m_pointCloudSize], packet->pointsXYZI,
-                           packet->nPoints * sizeof(dwLidarPointXYZI));
-                    m_pointCloudSize += packet->nPoints;
+            // Time budget: onProcess() should return quickly (target: <50ms for 6 FPS)
+            auto processStart = std::chrono::steady_clock::now();
+            const auto MAX_PROCESS_TIME_MS = 50;
+            
+            // Read packets in a loop until we get a complete scan or timeout
+            // Use shorter timeout (10ms) to avoid blocking too long
+            while (true) {
+                // Check time budget - must return quickly to avoid queue overflow
+                auto elapsed = std::chrono::steady_clock::now() - processStart;
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > MAX_PROCESS_TIME_MS) {
+                    if (totalPacketsRead <= 20) {
+                        std::cout << "[DWFastLIO] Time budget exceeded, returning from onProcess()" << std::endl;
+                    }
+                    break; // Return to avoid blocking
                 }
                 
-                // When scan complete, feed to SLAM
-                if (packet->scanComplete && m_pointCloudSize > 0) {
-                    m_slam->feedLiDAR(m_pointCloudBuffer.get(), m_pointCloudSize, packet->hostTimestamp);
-                    m_pointCloudSize = 0; // Reset for next scan
-                }
+                const dwLidarDecodedPacket* packet;
+                // Use 10ms timeout - short enough to avoid blocking, long enough for packets
+                dwStatus status = dwSensorLidar_readPacket(&packet, 10000, m_lidarSensor); // 10ms timeout
                 
-                dwSensorLidar_returnPacket(packet, m_lidarSensor);
-            } else if (status == DW_END_OF_STREAM) {
-                // For recorded data, reset and loop
-                dwSensor_reset(m_lidarSensor);
-                m_pointCloudSize = 0;
+                if (status == DW_SUCCESS) {
+                    totalPacketsRead++;
+                    packetsInCurrentScan++;
+                    
+                    // Log first few packets
+                    if (totalPacketsRead <= 15) {
+                        std::cout << "[DWFastLIO] Read packet #" << totalPacketsRead 
+                                  << ": " << packet->nPoints << " points, scanComplete=" 
+                                  << packet->scanComplete << ", accumulated=" << m_pointCloudSize << std::endl;
+                    }
+                    
+                    // Accumulate points into CPU buffer (no GPU-CPU copy - already CPU memory)
+                    if (m_pointCloudSize + packet->nPoints <= m_pointCloudCapacity) {
+                        // Direct memcpy - CPU to CPU, no GPU involved
+                        memcpy(&m_pointCloudBuffer[m_pointCloudSize], packet->pointsXYZI,
+                               packet->nPoints * sizeof(dwLidarPointXYZI));
+                        m_pointCloudSize += packet->nPoints;
+                    } else {
+                        // Buffer full - this shouldn't happen, but handle it
+                        std::cout << "[DWFastLIO] ERROR: Point cloud buffer full! Dropping scan." << std::endl;
+                        m_pointCloudSize = 0; // Reset
+                        packetsInCurrentScan = 0;
+                        dwSensorLidar_returnPacket(packet, m_lidarSensor);
+                        break;
+                    }
+                    
+                    // CRITICAL: Return packet IMMEDIATELY after copying to avoid queue overflow
+                    // Don't wait for scanComplete to return the packet!
+                    bool isScanComplete = packet->scanComplete;
+                    dwSensorLidar_returnPacket(packet, m_lidarSensor);
+                    
+                    // When scan complete, feed COMPLETE 360° scan to SLAM
+                    // Fast-LIO expects complete scans, not individual packets
+                    if (isScanComplete && m_pointCloudSize > 0) {
+                        totalScansComplete++;
+                        std::cout << "[DWFastLIO] ===== Complete 360° scan #" << totalScansComplete 
+                                  << ": " << m_pointCloudSize << " points from " << packetsInCurrentScan 
+                                  << " packets - feeding to SLAM =====" << std::flush << std::endl;
+                        
+                        // Check if SLAM is initialized
+                        if (!m_slam) {
+                            std::cout << "[DWFastLIO] ERROR: m_slam is NULL! Cannot feed scan." << std::endl;
+                            m_pointCloudSize = 0;
+                            packetsInCurrentScan = 0;
+                            break;
+                        }
+                        
+                        std::cout << "[DWFastLIO] [MAIN] About to call feedLiDAR() with " << m_pointCloudSize 
+                                  << " points, timestamp=" << packet->hostTimestamp << std::flush << std::endl;
+                        
+                        // Validate inputs before calling
+                        if (!m_pointCloudBuffer) {
+                            std::cerr << "[DWFastLIO] [MAIN] ERROR: m_pointCloudBuffer is NULL!" << std::endl;
+                            m_pointCloudSize = 0;
+                            packetsInCurrentScan = 0;
+                            break;
+                        }
+                        if (m_pointCloudSize == 0) {
+                            std::cerr << "[DWFastLIO] [MAIN] ERROR: m_pointCloudSize is 0!" << std::endl;
+                            m_pointCloudSize = 0;
+                            packetsInCurrentScan = 0;
+                            break;
+                        }
+                        
+                        std::cout << "[DWFastLIO] [MAIN] Validated inputs, calling feedLiDAR()..." << std::flush << std::endl;
+                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: About to call feedLiDAR, m_slam=" 
+                                  << (void*)m_slam.get() << std::flush << std::endl;
+                        
+                        // WARNING: feedLiDAR will convert points synchronously - this can block!
+                        // For large scans (15K+ points), this conversion takes time
+                        auto feedStart = std::chrono::steady_clock::now();
+                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: Entering try block..." << std::flush << std::endl;
+                        try {
+                            std::cerr << "[DWFastLIO] [MAIN] CRITICAL: Testing object callability..." << std::flush << std::endl;
+                        m_slam->testFunction();
+                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: testFunction() returned, calling feedLiDAR()..." << std::flush << std::endl;
+                            m_slam->feedLiDAR(m_pointCloudBuffer.get(), m_pointCloudSize, packet->hostTimestamp);
+                            std::cerr << "[DWFastLIO] [MAIN] CRITICAL: feedLiDAR() returned!" << std::flush << std::endl;
+                            std::cout << "[DWFastLIO] [MAIN] feedLiDAR() returned successfully" << std::flush << std::endl;
+                        } catch (const std::exception& e) {
+                            std::cerr << "[DWFastLIO] [MAIN] ERROR: Exception in feedLiDAR(): " << e.what() << std::endl;
+                        } catch (...) {
+                            std::cerr << "[DWFastLIO] [MAIN] ERROR: Unknown exception in feedLiDAR()" << std::endl;
+                        }
+                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: Exited try block" << std::flush << std::endl;
+                        auto feedTime = std::chrono::steady_clock::now() - feedStart;
+                        auto feedMs = std::chrono::duration_cast<std::chrono::milliseconds>(feedTime).count();
+                        
+                        std::cout << "[DWFastLIO] [MAIN] feedLiDAR() completed in " << feedMs << "ms" << std::flush << std::endl;
+                        
+                        if (feedMs > 50) {
+                            std::cout << "[DWFastLIO] [MAIN] WARNING: feedLiDAR took " << feedMs 
+                                      << "ms (this blocks the main thread!)" << std::endl;
+                        }
+                        
+                        m_pointCloudSize = 0; // Reset for next scan
+                        packetsInCurrentScan = 0;
+                        break; // Got complete scan, exit loop
+                    }
+                } else if (status == DW_TIME_OUT) {
+                    // Timeout - no more packets available right now
+                    // If we have accumulated points but scan not complete, keep them for next frame
+                    // This is normal - packets arrive asynchronously
+                    break;
+                } else if (status == DW_END_OF_STREAM) {
+                    // End of stream
+                    std::cout << "[DWFastLIO] LiDAR end of stream" << std::endl;
+                    break;
+                } else if (status == DW_NOT_READY || status == DW_NOT_AVAILABLE) {
+                    // Not ready - normal, just exit
+                    break;
+                } else {
+                    // Other error - log it
+                    static int error_count = 0;
+                    if (++error_count <= 5) {
+                        std::cout << "[DWFastLIO] LiDAR read error: " << dwGetStatusName(status) << std::endl;
+                    }
+                    break;
+                }
             }
         }
     }
     
     void onRender() override {
+        if (!m_renderEngine || !m_slam) {
+            return; // Not initialized yet
+        }
+        
         dwRenderEngine_reset(m_renderEngine);
         dwRenderEngine_setTile(0, m_renderEngine);
         dwRenderEngine_setModelView(getMouseView().getModelView(), m_renderEngine);
         dwRenderEngine_setProjection(getMouseView().getProjection(), m_renderEngine);
         
-        // Render map
+        // Get pose once (thread-safe, fast)
+        Eigen::Matrix4d pose = Eigen::Matrix4d::Identity(); // Default identity
+        try {
+            pose = m_slam->getCurrentPose();
+        } catch (...) {
+            // If getCurrentPose fails, use identity
+            pose = Eigen::Matrix4d::Identity();
+        }
+        
+        // Render map - only render subset of points for performance (max 50K points)
         auto mapCloud = m_slam->getMapCloud();
         if (mapCloud && !mapCloud->empty()) {
-            std::vector<dwVector3f> mapPoints;
-            mapPoints.reserve(std::min(mapCloud->size(), size_t(1000000)));
+            const size_t MAX_RENDER_POINTS = 50000; // Limit render points for performance
+            const size_t step = std::max(size_t(1), mapCloud->size() / MAX_RENDER_POINTS);
             
-            for (const auto& pt : mapCloud->points) {
-                if (mapPoints.size() >= 1000000) break; // Limit for performance
+            std::vector<dwVector3f> mapPoints;
+            mapPoints.reserve(std::min(mapCloud->size() / step, MAX_RENDER_POINTS));
+            
+            for (size_t i = 0; i < mapCloud->size(); i += step) {
+                if (mapPoints.size() >= MAX_RENDER_POINTS) break;
+                const auto& pt = mapCloud->points[i];
                 mapPoints.push_back({pt.x, pt.y, pt.z});
             }
             
-            dwRenderEngine_setBuffer(m_mapBuffer,
-                                    DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-                                    mapPoints.data(),
-                                    sizeof(dwVector3f), 0,
-                                    mapPoints.size(),
-                                    m_renderEngine);
-            
-            dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_WHITE, m_renderEngine);
-            dwRenderEngine_renderBuffer(m_mapBuffer, mapPoints.size(), m_renderEngine);
+            if (!mapPoints.empty()) {
+                dwRenderEngine_setBuffer(m_mapBuffer,
+                                        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
+                                        mapPoints.data(),
+                                        sizeof(dwVector3f), 0,
+                                        mapPoints.size(),
+                                        m_renderEngine);
+                
+                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_WHITE, m_renderEngine);
+                dwRenderEngine_renderBuffer(m_mapBuffer, mapPoints.size(), m_renderEngine);
+            }
         }
         
-        // Render current scan
+        // Render current scan - limit to reasonable size
         if (m_pointCloudSize > 0) {
-            std::vector<dwVector3f> scanPoints(m_pointCloudSize);
-            auto pose = m_slam->getCurrentPose();
+            const size_t MAX_SCAN_POINTS = 10000; // Limit scan rendering
+            const size_t step = std::max(size_t(1), m_pointCloudSize / MAX_SCAN_POINTS);
             
-            for (size_t i = 0; i < m_pointCloudSize; ++i) {
+            std::vector<dwVector3f> scanPoints;
+            scanPoints.reserve(std::min(m_pointCloudSize / step, MAX_SCAN_POINTS));
+            
+            for (size_t i = 0; i < m_pointCloudSize; i += step) {
+                if (scanPoints.size() >= MAX_SCAN_POINTS) break;
                 // Transform to world frame
                 Eigen::Vector4d pt(m_pointCloudBuffer[i].x, m_pointCloudBuffer[i].y, m_pointCloudBuffer[i].z, 1.0);
                 Eigen::Vector4d transformed = pose * pt;
-                scanPoints[i] = {static_cast<float32_t>(transformed.x()),
-                                static_cast<float32_t>(transformed.y()),
-                                static_cast<float32_t>(transformed.z())};
+                scanPoints.push_back({static_cast<float32_t>(transformed.x()),
+                                    static_cast<float32_t>(transformed.y()),
+                                    static_cast<float32_t>(transformed.z())});
             }
             
-            dwRenderEngine_setBuffer(m_currentScanBuffer,
-                                    DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-                                    scanPoints.data(),
-                                    sizeof(dwVector3f), 0,
-                                    scanPoints.size(),
-                                    m_renderEngine);
-            
-            dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_renderEngine);
-            dwRenderEngine_renderBuffer(m_currentScanBuffer, scanPoints.size(), m_renderEngine);
+            if (!scanPoints.empty()) {
+                dwRenderEngine_setBuffer(m_currentScanBuffer,
+                                        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
+                                        scanPoints.data(),
+                                        sizeof(dwVector3f), 0,
+                                        scanPoints.size(),
+                                        m_renderEngine);
+                
+                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_renderEngine);
+                dwRenderEngine_renderBuffer(m_currentScanBuffer, scanPoints.size(), m_renderEngine);
+            }
         }
         
-        // Render trajectory
+        // Render trajectory - limit to recent points
         auto trajectory = m_slam->getTrajectory();
         if (!trajectory.empty()) {
-            std::vector<dwVector3f> trajPoints;
-            trajPoints.reserve(trajectory.size());
+            const size_t MAX_TRAJ_POINTS = 1000; // Limit trajectory rendering
+            size_t startIdx = trajectory.size() > MAX_TRAJ_POINTS ? trajectory.size() - MAX_TRAJ_POINTS : 0;
             
-            for (const auto& pose : trajectory) {
-                trajPoints.push_back({static_cast<float32_t>(pose(0,3)),
-                                     static_cast<float32_t>(pose(1,3)),
-                                     static_cast<float32_t>(pose(2,3))});
+            std::vector<dwVector3f> trajPoints;
+            trajPoints.reserve(trajectory.size() - startIdx);
+            
+            for (size_t i = startIdx; i < trajectory.size(); ++i) {
+                trajPoints.push_back({static_cast<float32_t>(trajectory[i](0,3)),
+                                     static_cast<float32_t>(trajectory[i](1,3)),
+                                     static_cast<float32_t>(trajectory[i](2,3))});
             }
             
-            dwRenderEngine_setBuffer(m_trajectoryBuffer,
-                                    DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINESTRIP_3D,
-                                    trajPoints.data(),
-                                    sizeof(dwVector3f), 0,
-                                    trajPoints.size(),
-                                    m_renderEngine);
-            
-            dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
-            dwRenderEngine_renderBuffer(m_trajectoryBuffer, trajPoints.size(), m_renderEngine);
+            if (!trajPoints.empty()) {
+                dwRenderEngine_setBuffer(m_trajectoryBuffer,
+                                        DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINESTRIP_3D,
+                                        trajPoints.data(),
+                                        sizeof(dwVector3f), 0,
+                                        trajPoints.size(),
+                                        m_renderEngine);
+                
+                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
+                dwRenderEngine_renderBuffer(m_trajectoryBuffer, trajPoints.size(), m_renderEngine);
+            }
         }
         
         // Render text overlay
@@ -381,7 +581,6 @@ public:
         dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_16, m_renderEngine);
         dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
         
-        auto pose = m_slam->getCurrentPose();
         std::string poseText = "Position: " + 
                               std::to_string(pose(0,3)) + ", " +
                               std::to_string(pose(1,3)) + ", " +

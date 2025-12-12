@@ -93,13 +93,20 @@ inline void dwPointCloudToPCL(const dwLidarPointXYZI* dwPoints,
                               size_t numPoints,
                               pcl::PointCloud<pcl::PointXYZI>::Ptr& pclCloud)
 {
+    // Pre-allocate to avoid reallocations during resize
+    pclCloud->points.reserve(numPoints);
     pclCloud->points.resize(numPoints);
     pclCloud->width = numPoints;
     pclCloud->height = 1;
     pclCloud->is_dense = false;
     
+    // Direct memory copy for x,y,z (12 bytes) then set intensity
+    // This is faster than calling dwPointToPCL for each point
     for (size_t i = 0; i < numPoints; ++i) {
-        dwPointToPCL(dwPoints[i], pclCloud->points[i]);
+        pclCloud->points[i].x = dwPoints[i].x;
+        pclCloud->points[i].y = dwPoints[i].y;
+        pclCloud->points[i].z = dwPoints[i].z;
+        pclCloud->points[i].intensity = dwPoints[i].intensity;
     }
 }
 

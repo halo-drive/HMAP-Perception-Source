@@ -119,6 +119,11 @@ public:
     bool isInitialized() const { return initialized_; }
     
     /**
+     * @brief Test function to verify object is callable
+     */
+    void testFunction() const;
+    
+    /**
      * @brief Check if map building mode (true) or localization mode (false)
      */
     bool isMappingMode() const { return mapping_mode_; }
@@ -156,11 +161,12 @@ private:
     std::mutex lidar_mutex_;
     std::deque<std::pair<pcl::PointCloud<pcl::PointXYZI>::Ptr, dwTime_t>> lidar_buffer_;
     
-    // State
+    // State (protected by mutex for thread safety)
+    mutable std::mutex state_mutex_;
     Eigen::Matrix4d current_pose_;
     std::vector<Eigen::Matrix4d> trajectory_;
     
-    // Map
+    // Map (protected by mutex for thread safety)
     pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud_;
     
     // Processing threads
