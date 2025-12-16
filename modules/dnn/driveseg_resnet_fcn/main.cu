@@ -107,6 +107,86 @@ __global__ void blendMaskKernel(
     p[2] = (uint8_t)(255.f * b + 0.5f);
     // preserve p[3]
 }
+// ===============================================================
+// CUDA: GPU-accelerated argmax for segmentation (NCHW layout)
+// Input: [C, H, W] FP32 logits (reverse-order: [W, H, C, N])
+// Output: [H, W] uint8 class indices
+// ===============================================================
+__global__ void argmaxNCHW_kernel(
+    uint8_t* classIndices,      // Output: [H*W] class map
+    const float* logits,        // Input: [C*H*W] logits (NCHW)
+    int W, int H, int C)
+{
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if (x >= W || y >= H) return;
+    
+    const int spatialIdx = y * W + x;
+    const int spatialSize = W * H;
+    
+    // Find max across channel dimension
+    float maxVal = logits[spatialIdx];  // Class 0
+    uint8_t maxClass = 0;
+    
+    #pragma unroll
+    for (int c = 1; c < C; ++c) {
+        float val = logits[c * spatialSize + spatialIdx];
+        if (val > maxVal) {
+            maxVal = val;
+            maxClass = c;
+        }
+    }
+    
+    classIndices[spatialIdx] = maxClass;
+}
+
+// ===============================================================
+// CUDA: Colorize class indices and blend in single pass
+// ===============================================================
+__global__ void colorizeAndBlend_kernel(
+    uint8_t* rgba,              // Input/Output: RGBA image
+    const uint8_t* classIndices, // Input: class map
+    int imgW, int imgH, int imgStrideBytes,
+    int maskW, int maskH,
+    const uint8_t* colorLUT,    // [numClasses * 4] RGBA colors
+    float alpha)
+{
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if (x >= imgW || y >= imgH) return;
+    
+    // Bilinear scale from mask to image coordinates
+    const float mx_f = (float)x * ((float)maskW / (float)imgW);
+    const float my_f = (float)y * ((float)maskH / (float)imgH);
+    const int mx = (int)mx_f;
+    const int my = (int)my_f;
+    
+    if (mx >= maskW || my >= maskH) return;
+    
+    const uint8_t classIdx = classIndices[my * maskW + mx];
+    
+    // Skip background (class 0)
+    if (classIdx == 0) return;
+    
+    // Lookup color for this class
+    const uint8_t* color = &colorLUT[classIdx * 4];
+    const uint8_t colorA = color[3];
+    
+    if (colorA == 0) return;  // Fully transparent
+    
+    // Blend color into image
+    uint8_t* pixel = rgba + y * imgStrideBytes + x * 4;
+    
+    const float finalAlpha = (colorA / 255.0f) * alpha;
+    const float invAlpha = 1.0f - finalAlpha;
+    
+    pixel[0] = (uint8_t)(invAlpha * pixel[0] + finalAlpha * color[0]);
+    pixel[1] = (uint8_t)(invAlpha * pixel[1] + finalAlpha * color[1]);
+    pixel[2] = (uint8_t)(invAlpha * pixel[2] + finalAlpha * color[2]);
+    // pixel[3] unchanged
+}
 
 // ===============================================================
 // App
@@ -163,7 +243,11 @@ private:
         uint64_t frameId{0};
         float avgMs{0.f};
         uint32_t count{0};
+        
+        // ADD: Track inference start time
+        std::chrono::high_resolution_clock::time_point inferStartTime;
     } m_dnnCtx[MAX_CAMS];
+
 
     // Stats
     std::atomic<uint64_t> m_frameCounter{0};
@@ -487,6 +571,7 @@ void DriveSeg4CamApp::grabFrames(dwCameraFrameHandle_t frames[])
     }
 }
 
+
 void DriveSeg4CamApp::startAllInferences(dwCameraFrameHandle_t frames[])
 {
     for (uint32_t i = 0; i < m_numCameras; ++i) {
@@ -494,6 +579,8 @@ void DriveSeg4CamApp::startAllInferences(dwCameraFrameHandle_t frames[])
         if (c.running || frames[i] == nullptr) continue;
 
         try {
+            c.inferStartTime = std::chrono::high_resolution_clock::now();  // ADD: Start timing
+            
             prepareInput(i, frames[i]);
             runInference(i);
             c.running = true;
@@ -512,7 +599,13 @@ void DriveSeg4CamApp::maybeCollect(uint32_t i)
 
     cudaError_t st = cudaEventQuery(c.inferDone);
     if (st == cudaSuccess) {
-        collectAndOverlay(i);
+        collectAndOverlay(i);  // Completes postprocessing
+        
+        // ADD: Measure FULL pipeline time
+        auto endTime = std::chrono::high_resolution_clock::now();
+        float totalMs = std::chrono::duration<float, std::milli>(endTime - c.inferStartTime).count();
+        c.avgMs = (c.avgMs * c.count + totalMs) / (c.count + 1);
+        
         c.running = false;
         c.count++;
         m_recentInferences++;
@@ -578,103 +671,90 @@ void DriveSeg4CamApp::runInference(uint32_t i)
 
 void DriveSeg4CamApp::collectAndOverlay(uint32_t i)
 {
+    
     auto &c = m_dnnCtx[i];
     CHECK_DW_ERROR(dwDNNTensorStreamer_consumerReceive(&c.outTensorHost, 1000, c.outStreamer));
 
     void* hptr = nullptr;
     CHECK_DW_ERROR(dwDNNTensor_lock(&hptr, c.outTensorHost));
 
-    // Interpret output dims using DNNTensor header rule:
-    // NCHW => dimensionSize = [W, H, C, N]; NHWC => [C, W, H, N]
-    int C=1,H=1,W=1;
-    if (m_outProps.tensorLayout == DW_DNN_TENSOR_LAYOUT_NCHW) {
-        W = (int)m_outProps.dimensionSize[0];
-        H = (int)m_outProps.dimensionSize[1];
-        C = (int)m_outProps.dimensionSize[2];
-    } else if (m_outProps.tensorLayout == DW_DNN_TENSOR_LAYOUT_NHWC) {
-        C = (int)m_outProps.dimensionSize[0];
-        W = (int)m_outProps.dimensionSize[1];
-        H = (int)m_outProps.dimensionSize[2];
-    } else {
-        W = (int)m_outProps.dimensionSize[0];
-        H = (int)m_outProps.dimensionSize[1];
-        C = (int)m_outProps.dimensionSize[2];
-    }
-
-    std::vector<uint8_t> hostMask((size_t)H * (size_t)W, 0);
-    auto mark_drivable = [&](int x, int y) { hostMask[(size_t)y * (size_t)W + (size_t)x] = 255; };
-
-    if (m_outputIsFP16) {
-        const dwFloat16_t* f16 = reinterpret_cast<const dwFloat16_t*>(hptr);
-        if (C == 1) {
-            for (int y=0; y<H; ++y)
-                for (int x=0; x<W; ++x)
-                    if ((float)f16[y*W + x] > 0.5f) mark_drivable(x,y);
-        } else {
-            for (int y=0; y<H; ++y) {
-                for (int x=0; x<W; ++x) {
-                    int best = 0; float bestv = -1e9f;
-                    for (int cix=0; cix<C; ++cix) {
-                        float v = (float)f16[cix*H*W + y*W + x];
-                        if (v > bestv) { bestv = v; best = cix; }
-                    }
-                    if (best == 1) mark_drivable(x,y); // assume class 1 = drivable
-                }
-            }
-        }
-    } else {
-        const float* f32 = reinterpret_cast<const float*>(hptr);
-        if (C == 1) {
-            for (int y=0; y<H; ++y)
-                for (int x=0; x<W; ++x)
-                    if (f32[y*W + x] > 0.5f) mark_drivable(x,y);
-        } else {
-            for (int y=0; y<H; ++y) {
-                for (int x=0; x<W; ++x) {
-                    int best = 0; float bestv = -1e9f;
-                    for (int cix=0; cix<C; ++cix) {
-                        float v = f32[cix*H*W + y*W + x];
-                        if (v > bestv) { bestv = v; best = cix; }
-                    }
-                    if (best == 1) mark_drivable(x,y);
-                }
-            }
-        }
-    }
-
+    // Get output dimensions (NCHW: [W, H, C, N])
+    const int W = (int)m_outProps.dimensionSize[0];
+    const int H = (int)m_outProps.dimensionSize[1];
+    const int C = (int)m_outProps.dimensionSize[2];
+    
+    const float* h_logits = reinterpret_cast<const float*>(hptr);
+    
+    // ========== GPU ARGMAX ==========
+    
+    // Allocate GPU memory for logits and class map
+    float* d_logits = nullptr;
+    uint8_t* d_classMap = nullptr;
+    const size_t logitsBytes = W * H * C * sizeof(float);
+    const size_t classMapBytes = W * H * sizeof(uint8_t);
+    
+    cudaMalloc(&d_logits, logitsBytes);
+    cudaMalloc(&d_classMap, classMapBytes);
+    
+    // Upload logits to GPU
+    cudaMemcpyAsync(d_logits, h_logits, logitsBytes, cudaMemcpyHostToDevice, c.stream);
+    
+    // Launch argmax kernel
+    dim3 argmaxBlock(16, 16);
+    dim3 argmaxGrid((W + 15) / 16, (H + 15) / 16);
+    
+    argmaxNCHW_kernel<<<argmaxGrid, argmaxBlock, 0, c.stream>>>(
+        d_classMap, d_logits, W, H, C
+    );
+    
     CHECK_DW_ERROR(dwDNNTensor_unlock(c.outTensorHost));
     CHECK_DW_ERROR(dwDNNTensorStreamer_consumerReturn(&c.outTensorHost, c.outStreamer));
     CHECK_DW_ERROR(dwDNNTensorStreamer_producerReturn(nullptr, 1000, c.outStreamer));
-
-    // Upload mask and blend
+    
+    // ========== COLORIZE & BLEND ==========
+    
+    // Color LUT: [Background, Drivable, Alternative] (device memory)
+    static uint8_t h_colorLUT[3 * 4] = {
+        0, 0, 0, 0,          // Class 0: transparent
+        0, 255, 0, 180,      // Class 1: green 70% opacity
+        255, 255, 0, 150     // Class 2: yellow 60% opacity
+    };
+    
+    static uint8_t* d_colorLUT = nullptr;
+    if (!d_colorLUT) {
+        cudaMalloc(&d_colorLUT, sizeof(h_colorLUT));
+        cudaMemcpy(d_colorLUT, h_colorLUT, sizeof(h_colorLUT), cudaMemcpyHostToDevice);
+    }
+    
+    // Get camera RGBA image
     dwImageCUDA* cudaImg{};
     CHECK_DW_ERROR(dwImage_getCUDA(&cudaImg, m_imgRGBA[i]));
     uint8_t* d_rgba = reinterpret_cast<uint8_t*>(cudaImg->dptr[0]);
+    
     const int imgW = cudaImg->prop.width;
     const int imgH = cudaImg->prop.height;
     const int imgStride = cudaImg->pitch[0];
+    
+    // Launch colorize+blend kernel
+    dim3 blendBlock(16, 16);
+    dim3 blendGrid((imgW + 15) / 16, (imgH + 15) / 16);
+    
+    colorizeAndBlend_kernel<<<blendGrid, blendBlock, 0, c.stream>>>(
+        d_rgba, d_classMap,
+        imgW, imgH, imgStride,
+        W, H,
+        d_colorLUT, kOverlayAlpha
+    );
+    
+    cudaStreamSynchronize(c.stream);
+    
+    // Cleanup
+    cudaFree(d_logits);
+    cudaFree(d_classMap);
+    
 
-    uint8_t* d_mask = nullptr;
-    const size_t maskStride = (size_t)W;
-    const size_t maskBytes = (size_t)H * maskStride;
-    cudaMalloc(&d_mask, maskBytes);
-    cudaMemcpy(d_mask, hostMask.data(), maskBytes, cudaMemcpyHostToDevice);
-
-    dim3 blk(16,16);
-    dim3 grd((imgW + blk.x - 1)/blk.x, (imgH + blk.y - 1)/blk.y);
-    const float4 green = make_float4(0.f, 1.f, 0.f, 1.f);
-
-    auto &cctx = m_dnnCtx[i];
-    blendMaskKernel<<<grd, blk, 0, cctx.stream>>>(
-        d_rgba, imgW, imgH, imgStride,
-        d_mask, W, H, (int)maskStride,
-        green, kOverlayAlpha,
-        /*linearScaleOnly=*/true,
-        /*sx=*/0.f, /*sy=*/0.f, /*ox=*/0.f, /*oy=*/0.f);
-
-    cudaStreamSynchronize(cctx.stream);
-    cudaFree(d_mask);
 }
+
 
 std::string DriveSeg4CamApp::platformPrefix()
 {
