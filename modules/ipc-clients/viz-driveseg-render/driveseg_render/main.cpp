@@ -17,7 +17,6 @@
 #include <vector>
 
 #include <cuda_runtime.h>
-#include <GLFW/glfw3.h>
 
 // ---------------- DriveWorks ----------------
 #include <dw/core/base/Types.h>
