@@ -1,0 +1,10 @@
+{
+    "name": "gps:novatel",
+    "nominalSensor2Rig_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0],
+        "t": [0.8, 0.0, 1.5]
+    },
+    "parameter": "device=/dev/ttyUSB1,baudrate=115200",
+    "properties": {},
+    "protocol": "gps.novatel"
+}
