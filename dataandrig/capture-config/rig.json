@@ -5,7 +5,8 @@
             { "json-merge": "rig/imu-novatel.json" },
             { "json-merge": "rig/gps-novatel.json" },
             { "json-merge": "rig/camera-front-gmsl.json" },
-            { "json-merge": "rig/lidar.json"}
+            { "json-merge": "rig/lidar.json"},
+            { "json-merge": "rig/lidar2.json"}
         ],
         "vehicle": { "json-merge": "rig/vehicle-kia-eniro.json" }
     },
