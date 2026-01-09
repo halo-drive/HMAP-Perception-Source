@@ -1,0 +1,1 @@
+./recording_visualizer --rig-file=/usr/local/driveworks-5.20/samples/src/sensors/lidar/rigFile/rig.json --basic-dir=/usr/local/lidar_record/basic/ --hr-dir=/usr/local/lidar_record/hr/ --enable-icp=false

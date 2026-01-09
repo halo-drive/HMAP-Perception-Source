@@ -30,7 +30,7 @@
 #
 ################################################################################
 
-project(sample_imu_logger)
+project(recording_visualizer)
 
 #-------------------------------------------------------------------------------
 # Project files
@@ -38,9 +38,7 @@ project(sample_imu_logger)
 set(SOURCES main.cpp)
 
 set(LIBRARIES
-    samples_framework_checks
-    samples_framework_data_path
-    samples_framework_log
+    samples_framework
     samples_framework_program_arguments
     ${Driveworks_LIBRARIES}
 )
