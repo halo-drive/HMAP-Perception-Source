@@ -1,0 +1,10 @@
+{
+    "name": "gps:novatel",
+    "nominalSensor2Rig_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0],
+        "t": [0.8, 0.0, 1.5]
+    },
+    "parameter": "device=connection-type=ethernet,ip=192.168.1.153,port=2000,fifo-size=1024",
+    "properties": {},
+    "protocol": "gps.novatel"
+}

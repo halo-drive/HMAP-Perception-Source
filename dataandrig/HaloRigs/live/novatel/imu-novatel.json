@@ -1,0 +1,16 @@
+{
+    "name": "imu:novatel",
+    "correction_rig_T": [0.0, 0.0, 0.0],
+    "correction_sensor_R_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0]
+    },
+    "nominalSensor2Rig_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0],
+        "t": [1.42, 0.0, 0.5]
+    },
+    "parameter": "device=connection-type=ethernet,ip=192.168.1.153,port=2000,fifo-size=1024",
+    "properties": {
+        "gyroscope_bias": "0.0 0.0 0.0"
+    },
+    "protocol": "imu.novatel"
+}
