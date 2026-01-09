@@ -16,7 +16,7 @@
         "height": "2168",
         "width": "3848"
     },
-    "parameter": "camera-name=F008A120RM0AV2,interface=csi-ab,CPHY-mode=1,link=1,output-format=processed,async-record=1,file-buffer-size=16777216,fifo-size=3",
-    "protocol": "camera.gmsl"
+    "parameter": "video=/path/to/camera_front.mp4,create_seek=1,output-timestamp=synced",
+    "protocol": "camera.virtual"
 }
 
