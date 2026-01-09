@@ -9,7 +9,7 @@
             { "json-merge": "lidar/lidar_rear.json"},
 	    { "json-merge": "novatel/imu-novatel.json"},
 	    { "json-merge": "novatel/gps-novatel.json"},
-	    { "json-merge": "canbus/can.json"}
+	    { "json-merge": "canbus/can1.json"}
         ],
         "vehicle": { "json-merge": "vehicle/vehicle-kia-eniro.json" }
     },

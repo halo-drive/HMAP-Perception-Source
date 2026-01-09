@@ -5,8 +5,8 @@
         "roll-pitch-yaw": [0.0, 0.0, 0.0]
     },
     "nominalSensor2Rig_FLU": {
-        "roll-pitch-yaw": [0.0, 0.0, 0.0],
-        "t": [1.8621, -0.1939, 1.3165]
+        "roll-pitch-yaw": [0.0, 0.0, 90.0],
+        "t": [0.8, 0.97, 1.52]
     },
     "properties": {
         "Model": "ftheta",
@@ -19,4 +19,3 @@
     "parameter": "camera-name=F008A120RM0AV2,interface=csi-ab,CPHY-mode=1,link=2,output-format=processed,async-record=1,file-buffer-size=16777216,fifo-size=3",
     "protocol": "camera.gmsl"
 }
-
