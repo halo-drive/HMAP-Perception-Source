@@ -139,18 +139,18 @@ bool SygnalPomoParser::processCANFrame(const dwCANMessage& frame)
     // Route message to appropriate processor
     switch (frame.id) {
         case 0x4F1:  // CLU11 - Speed
-            printColored(stdout, COLOR_YELLOW, " Processing CLU11 (Speed) message\n");
+            // printColored(stdout, COLOR_YELLOW, " Processing CLU11 (Speed) message\n");
             messageProcessed = processSpeedMessage(frame);
             break;
             
         case 688:  // SAS11 - Steering
-            printColored(stdout, COLOR_YELLOW, " Processing SAS11 (Steering) message\n");
+           // printColored(stdout, COLOR_YELLOW, " Processing SAS11 (Steering) message\n");
             messageProcessed = processSteeringMessage(frame);
             break;
             
         case 902:  // WHL_SPD11 - Wheel speeds
             if (m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED) {
-                printColored(stdout, COLOR_YELLOW, " Processing WHL_SPD11 (Wheel Speed) message\n");
+               // printColored(stdout, COLOR_YELLOW, " Processing WHL_SPD11 (Wheel Speed) message\n");
                 messageProcessed = processWheelSpeedMessage(frame);
             } else {
                 messageProcessed = true; // Not needed but not an error
@@ -186,11 +186,11 @@ bool SygnalPomoParser::processSpeedMessage(const dwCANMessage& frame)
     dwVioSpeedDirectionESC direction = extractSpeedDirection(frame.data, frame.size);
 
     char buffer[256];
-    sprintf(buffer, "  Speed extracted: %.2f m/s (%.1f km/h), Direction: %s\n", 
+    /* sprintf(buffer, "  Speed extracted: %.2f m/s (%.1f km/h), Direction: %s\n", 
             speed, speed * 3.6f, 
             (direction == DW_VIO_SPEED_DIRECTION_E_S_C_FORWARD) ? "FORWARD" : 
             (direction == DW_VIO_SPEED_DIRECTION_E_S_C_BACKWARD) ? "BACKWARD" : "UNKNOWN");
-    printColored(stdout, COLOR_GREEN, buffer);
+    printColored(stdout, COLOR_GREEN, buffer); */
     
     if (speed < 0.0f || speed > MAX_VEHICLE_SPEED) {
         return false;
@@ -207,8 +207,9 @@ bool SygnalPomoParser::processSpeedMessage(const dwCANMessage& frame)
         buffer.hasSpeed = true;
         
         char logBuffer[256];
-        sprintf(logBuffer, "  State buffer updated: hasSpeed=true, timestamp=%lu\n", frame.timestamp_us);
-        printColored(stdout, COLOR_DEFAULT, logBuffer);
+        /* sprintf(logBuffer, "  State buffer updated: hasSpeed=true, timestamp=%lu\n", frame.timestamp_us);
+        printColored(stdout, COLOR_DEFAULT, logBuffer); */ 
+
     }
     
     m_diagnostics->speedMessagesReceived.fetch_add(1);
@@ -222,9 +223,9 @@ bool SygnalPomoParser::processSteeringMessage(const dwCANMessage& frame)
     float32_t steeringWheelAngle = extractSteeringWheelAngle(frame.data, frame.size);
     
     char buffer[256];
-    sprintf(buffer, "  Steering extracted: %.3f rad (%.1f°)\n", 
+    /* sprintf(buffer, "  Steering extracted: %.3f rad (%.1f°)\n", 
             steeringWheelAngle, steeringWheelAngle * 180.0f / M_PI);
-    printColored(stdout, COLOR_GREEN, buffer);
+    printColored(stdout, COLOR_GREEN, buffer); */ 
 
     if (std::abs(steeringWheelAngle) > MAX_STEERING_ANGLE) {
         return false;
@@ -240,15 +241,15 @@ bool SygnalPomoParser::processSteeringMessage(const dwCANMessage& frame)
         buffer.hasSteering = true;
         
         char logBuffer[256];
-        sprintf(logBuffer, "  State buffer updated: hasSteering=true, timestamp=%lu\n", frame.timestamp_us);
-        printColored(stdout, COLOR_DEFAULT, logBuffer);
+        /* sprintf(logBuffer, "  State buffer updated: hasSteering=true, timestamp=%lu\n", frame.timestamp_us);
+        printColored(stdout, COLOR_DEFAULT, logBuffer); */ 
 
         // Derive front steering angle
         float32_t frontSteeringAngle = convertSteeringWheelToFrontWheelAngle(steeringWheelAngle);
         
-        sprintf(logBuffer, "  Front wheel angle: %.3f rad (%.1f°)\n", 
+      /*  sprintf(logBuffer, "  Front wheel angle: %.3f rad (%.1f°)\n", 
                 frontSteeringAngle, frontSteeringAngle * 180.0f / M_PI);
-        printColored(stdout, COLOR_GREEN, logBuffer);
+        printColored(stdout, COLOR_GREEN, logBuffer); */ 
 
         buffer.pendingNonSafety.frontSteeringAngle = frontSteeringAngle;
         buffer.pendingNonSafety.frontSteeringTimestamp = frame.timestamp_us;
@@ -275,9 +276,9 @@ bool SygnalPomoParser::processWheelSpeedMessage(const dwCANMessage& frame)
             float32_t wheelSpeedLinear = extractWheelSpeed(frame.data, frame.size, wheelIndex);
 
             const char* wheelNames[] = {"FL", "FR", "RL", "RR"};
-            sprintf(buffer, "  Wheel %s: %.2f m/s (%.1f km/h)\n", 
+            /* sprintf(buffer, "  Wheel %s: %.2f m/s (%.1f km/h)\n", 
                     wheelNames[wheelIndex], wheelSpeedLinear, wheelSpeedLinear * 3.6f);
-            printColored(stdout, COLOR_GREEN, buffer);
+            printColored(stdout, COLOR_GREEN, buffer); */ 
             
             if (std::abs(wheelSpeedLinear) > MAX_WHEEL_SPEED * m_configuration.wheelRadius[wheelIndex]) {
                 allWheelsValid = false;
@@ -335,12 +336,17 @@ bool SygnalPomoParser::processYawRateMessage(const dwCANMessage& frame)
     return true;
 }
 
-
 bool SygnalPomoParser::getTemporallySynchronizedState(
     dwVehicleIOSafetyState* safetyState, 
     dwVehicleIONonSafetyState* nonSafetyState,
     dwVehicleIOActuationFeedback* actuationFeedback)
 {
+    static uint32_t callCount = 0;
+    ++callCount;
+    
+    fprintf(stderr, "     [CAN #%u] ENTER getTemporallySynchronizedState\n", callCount);
+    fflush(stderr);
+    
     safetyState->size = sizeof(dwVehicleIOSafetyState);
     nonSafetyState->size = sizeof(dwVehicleIONonSafetyState);
     
@@ -349,41 +355,83 @@ bool SygnalPomoParser::getTemporallySynchronizedState(
     }
     
     if (!safetyState || !nonSafetyState) {
+        fprintf(stderr, "     [CAN #%u] NULL pointer, returning false\n", callCount);
+        fflush(stderr);
         return false;
     }
 
+    fprintf(stderr, "     [CAN #%u] Acquiring vehicle state mutex...\n", callCount);
+    fflush(stderr);
+    
     std::lock_guard<std::mutex> lock(m_vehicleState->stateMutex);
     
-    // Check if we have a complete, temporally coherent state
-    if (!m_vehicleState->isStateComplete()) {
-        return false;
-    }
-
-    // Use current system time as reference for temporal coherency
-    dwTime_t currentTime = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    fprintf(stderr, "     [CAN #%u] Mutex acquired\n", callCount);
+    fflush(stderr);
     
-    if (!m_vehicleState->isTemporallyCoherent(currentTime, m_configuration.temporalWindow_us, m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED)) {
+    // Check if we have a complete state
+    fprintf(stderr, "     [CAN #%u] Checking state completeness...\n", callCount);
+    fflush(stderr);
+    
+    bool stateComplete = m_vehicleState->isStateComplete();
+    fprintf(stderr, "     [CAN #%u] State complete: %s (hasSpeed=%d, hasSteering=%d)\n", 
+            callCount, stateComplete ? "YES" : "NO",
+            m_vehicleState->stateBuffer.hasSpeed,
+            m_vehicleState->stateBuffer.hasSteering);
+    fflush(stderr);
+    
+    if (!stateComplete) {
+        fprintf(stderr, "     [CAN #%u] State incomplete, returning false\n", callCount);
+        fflush(stderr);
         return false;
     }
 
-    // ========================================
+    // FIXED: Use most recent CAN timestamp as reference (not system time)
+    dwTime_t referenceTime = std::max({
+        m_vehicleState->stateBuffer.lastSpeedUpdate,
+        m_vehicleState->stateBuffer.lastSteeringUpdate,
+        m_vehicleState->stateBuffer.lastWheelSpeedUpdate
+    });
+    
+    fprintf(stderr, "     [CAN #%u] Reference time: %lu (most recent CAN timestamp)\n", 
+            callCount, referenceTime);
+    fprintf(stderr, "     [CAN #%u] Last updates: speed=%lu, steering=%lu, wheels=%lu\n",
+            callCount,
+            m_vehicleState->stateBuffer.lastSpeedUpdate,
+            m_vehicleState->stateBuffer.lastSteeringUpdate,
+            m_vehicleState->stateBuffer.lastWheelSpeedUpdate);
+    fflush(stderr);
+    
+    fprintf(stderr, "     [CAN #%u] Checking temporal coherency...\n", callCount);
+    fflush(stderr);
+    
+    bool temporallyCoherent = m_vehicleState->isTemporallyCoherent(
+        referenceTime, 
+        m_configuration.temporalWindow_us, 
+        m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED);
+    
+    fprintf(stderr, "     [CAN #%u] Temporally coherent: %s (window=%lu µs)\n", 
+            callCount, temporallyCoherent ? "YES" : "NO",
+            m_configuration.temporalWindow_us);
+    fflush(stderr);
+    
+    if (!temporallyCoherent) {
+        fprintf(stderr, "     [CAN #%u] Not coherent, returning false\n", callCount);
+        fflush(stderr);
+        return false;
+    }
+
+    fprintf(stderr, "     [CAN #%u] Populating states...\n", callCount);
+    fflush(stderr);
+    
     // POPULATE SAFETY STATE
-    // ========================================
     *safetyState = m_vehicleState->stateBuffer.pendingSafety;
     safetyState->timestamp_us = m_vehicleState->stateBuffer.lastSteeringUpdate;
 
-    // ========================================
     // POPULATE NON-SAFETY STATE
-    // ========================================
     auto compensatedNonSafety = m_vehicleState->stateBuffer.pendingNonSafety;
-    
-    // Apply velocity compensation
     compensatedNonSafety.speedESC *= m_configuration.velocityFactor;
     
-    
     if (m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED) {
-        // For REAR_WHEEL_SPEED: use the most recent wheel timestamp
         dwTime_t maxWheelTime = 0;
         for (int i = 0; i < 4; i++) {
             if (compensatedNonSafety.wheelTicksTimestamp[i] > maxWheelTime) {
@@ -392,45 +440,38 @@ bool SygnalPomoParser::getTemporallySynchronizedState(
         }
         compensatedNonSafety.timestamp_us = maxWheelTime;
     } else {
-        // For FRONT_SPEED or REAR_SPEED: use speed message timestamp
         compensatedNonSafety.timestamp_us = m_vehicleState->stateBuffer.lastSpeedUpdate;
     }
     
     *nonSafetyState = compensatedNonSafety;
 
-    // ========================================
-    // ✅ NEW: POPULATE ACTUATION FEEDBACK
-    // ========================================
+    // POPULATE ACTUATION FEEDBACK
     if (actuationFeedback) {
-        *actuationFeedback = {};  // Zero-initialize
+        *actuationFeedback = {};
         actuationFeedback->size = sizeof(dwVehicleIOActuationFeedback);
         
-        // Copy wheel speeds and timestamps (critical for REAR_WHEEL_SPEED mode)
         for (int i = 0; i < 4; i++) {
             actuationFeedback->wheelSpeed[i] = compensatedNonSafety.wheelSpeed[i];
             actuationFeedback->wheelTicksTimestamp[i] = compensatedNonSafety.wheelTicksTimestamp[i];
         }
         
-        // Copy steering information
         actuationFeedback->frontSteeringAngle = compensatedNonSafety.frontSteeringAngle;
         actuationFeedback->frontSteeringTimestamp = compensatedNonSafety.frontSteeringTimestamp;
         actuationFeedback->steeringWheelAngle = safetyState->steeringWheelAngle;
-        
-        // Copy speed (for diagnostics/redundancy)
         actuationFeedback->speedESC = compensatedNonSafety.speedESC;
         actuationFeedback->speedDirectionESC = compensatedNonSafety.speedDirectionESC;
-        
-        // Main timestamp (same as NonSafetyState)
         actuationFeedback->timestamp_us = compensatedNonSafety.timestamp_us;
     }
 
     // Update diagnostics
     m_diagnostics->stateCommitsSuccessful.fetch_add(1);
-    m_diagnostics->lastStateCommitTimestamp.store(currentTime);
+    m_diagnostics->lastStateCommitTimestamp.store(referenceTime);
 
+    fprintf(stderr, "     [CAN #%u] SUCCESS, returning true\n", callCount);
+    fflush(stderr);
+    
     return true;
 }
-
 
 dwVehicleIOSafetyState SygnalPomoParser::getSafetyState() const
 {
@@ -459,9 +500,9 @@ bool SygnalPomoParser::checkMessageTimeouts(dwTime_t currentTimestamp)
     if (speedTimeout != m_diagnostics->speedMessageTimeout.load()) {
         m_diagnostics->speedMessageTimeout.store(speedTimeout);
         if (speedTimeout) {
-            sprintf(buffer, "SPEED message timeout detected! Last message: %lu μs ago\n", 
+            /* sprintf(buffer, "SPEED message timeout detected! Last message: %lu μs ago\n", 
                     currentTimestamp - lastSpeed);
-            printColored(stdout, COLOR_RED, buffer);
+            printColored(stdout, COLOR_RED, buffer); */ 
             timeoutDetected = true;
         }
     }
@@ -472,9 +513,9 @@ bool SygnalPomoParser::checkMessageTimeouts(dwTime_t currentTimestamp)
     if (steeringTimeout != m_diagnostics->steeringMessageTimeout.load()) {
         m_diagnostics->steeringMessageTimeout.store(steeringTimeout);
         if (steeringTimeout) {
-            sprintf(buffer, "STEERING message timeout detected! Last message: %lu μs ago\n", 
+            /* sprintf(buffer, "STEERING message timeout detected! Last message: %lu μs ago\n", 
                     currentTimestamp - lastSteering);
-            printColored(stdout, COLOR_RED, buffer);
+            printColored(stdout, COLOR_RED, buffer); */ 
             timeoutDetected = true;
         }
     }

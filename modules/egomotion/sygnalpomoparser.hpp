@@ -139,21 +139,59 @@ private:
         }
         
         bool isTemporallyCoherent(dwTime_t referenceTime, dwTime_t temporalWindow, 
-                          bool requireWheelSpeeds = false) const {
-            std::lock_guard<std::mutex> lock(stateMutex);
+                  bool requireWheelSpeeds = false) const {
+            fprintf(stderr, "       Checking temporal coherency...\n");
+            fprintf(stderr, "       referenceTime=%lu, window=%lu, requireWheels=%d\n",
+                    referenceTime, temporalWindow, requireWheelSpeeds);
+            fflush(stderr);
+            
+            // REMOVED: std::lock_guard<std::mutex> lock(stateMutex);
+            // Caller must already hold stateMutex!
+            
+            fprintf(stderr, "       lastSpeedUpdate=%lu (age=%lu µs)\n",
+                    stateBuffer.lastSpeedUpdate, referenceTime - stateBuffer.lastSpeedUpdate);
+            fprintf(stderr, "       lastSteeringUpdate=%lu (age=%lu µs)\n",
+                    stateBuffer.lastSteeringUpdate, referenceTime - stateBuffer.lastSteeringUpdate);
+            fflush(stderr);
             
             bool baseCoherent = (referenceTime - stateBuffer.lastSpeedUpdate <= temporalWindow) &&
                             (referenceTime - stateBuffer.lastSteeringUpdate <= temporalWindow);
+            
+            fprintf(stderr, "       Base coherent: %s\n", baseCoherent ? "YES" : "NO");
+            fflush(stderr);
+            
             if (requireWheelSpeeds) {
-                return baseCoherent && 
+                fprintf(stderr, "       lastWheelSpeedUpdate=%lu (age=%lu µs)\n",
+                        stateBuffer.lastWheelSpeedUpdate, 
+                        referenceTime - stateBuffer.lastWheelSpeedUpdate);
+                fflush(stderr);
+                
+                bool result = baseCoherent && 
                     (referenceTime - stateBuffer.lastWheelSpeedUpdate <= temporalWindow);
+                fprintf(stderr, "       Final result (with wheels): %s\n", result ? "YES" : "NO");
+                fflush(stderr);
+                return result;
             }
+            
+            fprintf(stderr, "       Final result: %s\n", baseCoherent ? "YES" : "NO");
+            fflush(stderr);
             return baseCoherent;
         }
 
         bool isStateComplete() const {
-            std::lock_guard<std::mutex> lock(stateMutex);
-            return stateBuffer.hasSpeed && stateBuffer.hasSteering;
+            fprintf(stderr, "       Checking state completeness...\n");
+            fflush(stderr);
+            
+            // REMOVED: std::lock_guard<std::mutex> lock(stateMutex);
+            // Caller must already hold stateMutex!
+            
+            bool result = stateBuffer.hasSpeed && stateBuffer.hasSteering;
+            
+            fprintf(stderr, "       hasSpeed=%d, hasSteering=%d, complete=%d\n",
+                    stateBuffer.hasSpeed, stateBuffer.hasSteering, result);
+            fflush(stderr);
+            
+            return result;
         }
     };
     
