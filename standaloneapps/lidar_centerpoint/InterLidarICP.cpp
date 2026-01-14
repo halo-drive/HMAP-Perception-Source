@@ -1011,6 +1011,10 @@ bool InterLidarICP::initializeObjectDetection() {
         return false;
     }
 
+    // Initialize SORT-style tracker
+    m_tracker = std::make_unique<SimpleTracker>(0.3f, 3, 1);  // IOU threshold 0.3, max age 3, min hits 1
+    std::cout << "SORT-style tracker initialized" << std::endl;
+
     std::cout << "CenterPoint object detection initialized successfully" << std::endl;
     return true;
 }
@@ -1845,6 +1849,24 @@ void InterLidarICP::performObjectDetection()
     }
 
     m_currentBoxes = applyAllFilters(rawBoxes);
+
+    // Update tracker and assign track IDs
+    if (m_tracker) {
+        std::cout << "[InterLidarICP] Updating tracker with " << m_currentBoxes.size() 
+                  << " filtered detections" << std::endl;
+        int numTracks = m_tracker->update(m_currentBoxes);
+        std::cout << "[InterLidarICP] Tracker update complete: " << numTracks 
+                  << " active tracks, " << m_currentBoxes.size() << " detections" << std::endl;
+        
+        // Log track IDs assigned
+        for (const auto& box : m_currentBoxes) {
+            std::cout << "[InterLidarICP]   Detection class=" << box.classId 
+                      << " at (" << box.x << "," << box.y << "," << box.z 
+                      << ") assigned trackId=" << box.trackId << std::endl;
+        }
+    } else {
+        std::cout << "[InterLidarICP] WARNING: Tracker is null, skipping track ID assignment" << std::endl;
+    }
 
     // Update detection statistics
     m_totalDetections += m_currentBoxes.size();

@@ -30,6 +30,7 @@
 #include <dwvisualization/core/Visualization.h>
 #include "FreeSpaceDW.hpp"
 #include "CenterPointDW.hpp"
+#include "SimpleTracker.hpp"
 
 // TensorRT includes for object detection
 #include <NvInfer.h>
@@ -215,6 +216,7 @@ private:
     std::vector<BoundingBox> m_currentBoxes;
     std::map<int, std::vector<BoundingBox>> m_trackingHistory;  // ID -> history of boxes
     int m_nextTrackID = 0;
+    std::unique_ptr<SimpleTracker> m_tracker;  // SORT-style tracker
     
     // Point cloud for object detection
     std::unique_ptr<float32_t[]> m_pointCloudForDetection;
@@ -436,18 +438,3 @@ public:
 };
 
 #endif // INTER_LIDAR_ICP_HPP
-
-
-
-
-// ./tensorRT_optimization \
-//   --modelType=onnx \
-//   --onnxFile=/usr/local/driveworks-5.20/samples/src/sensors/lidar/lidar_object_detection/pointpillars_deployable_fixed.onnx \
-//   --useDLA \
-//   --half2=1 \
-//   --workspaceSize=2048 \
-//   --verbose=1 \
-//   --out=/usr/local/driveworks-5.20/samples/src/sensors/lidar/lidar_object_detection/pp_dla_fp16.bin
-
-
-
