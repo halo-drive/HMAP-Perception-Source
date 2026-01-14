@@ -44227,10 +44227,10 @@ SygnalPomoParser Real-time Diagnostics:
   Total Messages: 56108, Valid: 9056, Invalid: 0
   Synchronized States: 419 successful, 0 failed
   Message Rate: 581.1 Hz, Commit Rate: 0.0 Hz
-[13-01-2026 16:18:13] SensorManager::stop() Joining thread begin 
-[13-01-2026 16:18:13] SensorManager::stop() Joining thread end 
-[13-01-2026 16:18:13] SensorManager::stop() Clear Camera event begin 
-[13-01-2026 16:18:13] SensorManager::stop() Clear Camera event end 
+[13-01-2026 16:18:13] SensorManager::stop() Joining thread begin
+[13-01-2026 16:18:13] SensorManager::stop() Joining thread end
+[13-01-2026 16:18:13] SensorManager::stop() Clear Camera event begin
+[13-01-2026 16:18:13] SensorManager::stop() Clear Camera event end
 [13-01-2026 16:18:13] SensorManager::printErrorStats() camera[0] lagging events: 44, errors: 0, drops: 0
 [13-01-2026 16:18:13] SensorManager::stop() stopped
 [13-01-2026 16:18:14] SIPLClient: ImageQueue timeout

@@ -203,6 +203,7 @@ bool SygnalPomoParser::processSpeedMessage(const dwCANMessage& frame)
         
         buffer.pendingNonSafety.speedESC = speed;
         buffer.pendingNonSafety.speedDirectionESC = direction;
+        buffer.pendingNonSafety.speedESCTimestamp = frame.timestamp_us;
         buffer.lastSpeedUpdate = frame.timestamp_us;
         buffer.hasSpeed = true;
         
@@ -237,6 +238,7 @@ bool SygnalPomoParser::processSteeringMessage(const dwCANMessage& frame)
         auto& buffer = m_vehicleState->stateBuffer;
         
         buffer.pendingSafety.steeringWheelAngle = steeringWheelAngle;
+        buffer.pendingSafety.timestamp_us = frame.timestamp_us;
         buffer.lastSteeringUpdate = frame.timestamp_us;
         buffer.hasSteering = true;
         
@@ -385,7 +387,7 @@ bool SygnalPomoParser::getTemporallySynchronizedState(
         return false;
     }
 
-    // FIXED: Use most recent CAN timestamp as reference (not system time)
+    
     dwTime_t referenceTime = std::max({
         m_vehicleState->stateBuffer.lastSpeedUpdate,
         m_vehicleState->stateBuffer.lastSteeringUpdate,
@@ -444,6 +446,7 @@ bool SygnalPomoParser::getTemporallySynchronizedState(
     }
     
     *nonSafetyState = compensatedNonSafety;
+    nonSafetyState->speedESCTimestamp = m_vehicleState->stateBuffer.lastSpeedUpdate;
 
     // POPULATE ACTUATION FEEDBACK
     if (actuationFeedback) {

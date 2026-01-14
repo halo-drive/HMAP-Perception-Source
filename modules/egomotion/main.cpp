@@ -211,159 +211,198 @@ private:
      * @return true if fusion was successful, false if waiting for more data
      */
     bool attemptTemporalFusion(dwTime_t currentTime) {
-    static uint32_t fusionCallCount = 0;
-    ++fusionCallCount;
-    
-    fprintf(stderr, "   [fusion #%u] START: currentTime=%lu\n", fusionCallCount, currentTime);
-    fflush(stderr);
-    
-    fprintf(stderr, "   [fusion #%u] Acquiring buffer mutex...\n", fusionCallCount);
-    fflush(stderr);
-    
-    std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
-    
-    fprintf(stderr, "   [fusion #%u] Mutex acquired, finding GPS anchor...\n", fusionCallCount);
-    fflush(stderr);
-    
-    // Find GPS anchor point (slowest sensor drives fusion timing)
-    auto gpsAnchor = findLatestValidGPS(currentTime);
-    if (gpsAnchor == m_temporalBuffers.gpsBuffer.end()) {
-        fprintf(stderr, "   [fusion #%u] No GPS anchor found, returning false\n", fusionCallCount);
-        fflush(stderr);
-        return false;
-    }
-    
-    fprintf(stderr, "   [fusion #%u] GPS anchor found: timestamp=%lu\n", 
-            fusionCallCount, gpsAnchor->first);
-    fflush(stderr);
-    
-    // Initialize trajectory from GPS even when vehicle is idle
-    if (m_poseHistory.empty()) {
-        fprintf(stderr, "   [fusion #%u] Initializing trajectory (first GPS fix)...\n", fusionCallCount);
+        static uint32_t fusionCallCount = 0;
+        ++fusionCallCount;
+        
+        fprintf(stderr, "   [fusion #%u] START: currentTime=%lu\n", fusionCallCount, currentTime);
         fflush(stderr);
         
-        Pose initialPose{};
-        initialPose.timestamp = gpsAnchor->first;
-        initialPose.rig2world = DW_IDENTITY_TRANSFORMATION3F;
-        initialPose.rpy[0] = initialPose.rpy[1] = initialPose.rpy[2] = 0.0f;
-        
-        memset(&initialPose.uncertainty, 0, sizeof(dwEgomotionUncertainty));
-        
-        m_poseHistory.push_back(initialPose);
-        m_shallRender = true;
-        
-        char buffer[256];
-        sprintf(buffer, "✓ Trajectory initialized from GPS fix:\n"
-                        "  Location: [%.6f°N, %.6f°E, %.2fm ASL]\n"
-                        "  Timestamp: %lu µs\n"
-                        "  System ready for motion tracking.\n",
-                gpsAnchor->second.latitude, 
-                gpsAnchor->second.longitude, 
-                gpsAnchor->second.altitude,
-                gpsAnchor->first);
-        printColored(stdout, COLOR_GREEN, buffer);
-        
-        fprintf(stderr, "   [fusion #%u] Trajectory initialized\n", fusionCallCount);
+        fprintf(stderr, "   [fusion #%u] Acquiring buffer mutex...\n", fusionCallCount);
         fflush(stderr);
-    }
-    
-    dwTime_t anchorTimestamp = gpsAnchor->first;
-    
-    fprintf(stderr, "   [fusion #%u] Checking timestamp (anchor=%lu, lastProcessed=%lu)\n",
-            fusionCallCount, anchorTimestamp, m_temporalBuffers.lastProcessedTimestamp);
-    fflush(stderr);
-    
-    // Skip if we've already processed this timestamp
-    if (anchorTimestamp <= m_temporalBuffers.lastProcessedTimestamp) {
-        fprintf(stderr, "   [fusion #%u] Already processed, returning false\n", fusionCallCount);
+        
+        std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
+        
+        fprintf(stderr, "   [fusion #%u] Mutex acquired, finding GPS anchor...\n", fusionCallCount);
         fflush(stderr);
-        return false;
-    }
-    
-    fprintf(stderr, "   [fusion #%u] Finding IMU match...\n", fusionCallCount);
-    fflush(stderr);
-    
-    // Find temporally aligned IMU data
-    auto imuMatch = findClosestSensorData(m_temporalBuffers.imuBuffer, anchorTimestamp, TEMPORAL_WINDOW_US);
-    if (imuMatch == m_temporalBuffers.imuBuffer.end()) {
-        fprintf(stderr, "   [fusion #%u] No IMU match found, returning false\n", fusionCallCount);
+        
+        // Find GPS anchor point (fusion cadence)
+        auto gpsAnchor = findLatestValidGPS(currentTime);
+        if (gpsAnchor == m_temporalBuffers.gpsBuffer.end()) {
+            fprintf(stderr, "   [fusion #%u] No GPS anchor found, returning false\n", fusionCallCount);
+            fflush(stderr);
+            return false;
+        }
+        
+        fprintf(stderr, "   [fusion #%u] GPS anchor found: timestamp=%lu\n", 
+                fusionCallCount, gpsAnchor->first);
         fflush(stderr);
-        return false;
-    }
-    
-    fprintf(stderr, "   [fusion #%u] IMU match found: timestamp=%lu\n", 
-            fusionCallCount, imuMatch->first);
-    fflush(stderr);
-    
-    // Extract synchronized sensor frames
-    dwGPSFrame& gpsFrame = gpsAnchor->second;
-    dwIMUFrame& imuFrame = imuMatch->second;
-    
-    // Update current sensor states for rendering/logging
-    m_currentGPSFrame = gpsFrame;
-    m_currentIMUFrame = imuFrame;
-    
-    fprintf(stderr, "   [fusion #%u] Processing synchronized sensor data...\n", fusionCallCount);
-    fflush(stderr);
-    
-    // Feed synchronized data to egomotion
-    processSynchronizedSensorData(gpsFrame, imuFrame, anchorTimestamp);
-    
-    fprintf(stderr, "   [fusion #%u] Sensor data processed\n", fusionCallCount);
-    fflush(stderr);
-    
-    // Handle CAN data synchronization
-    fprintf(stderr, "   [fusion #%u] Getting CAN synchronized state...\n", fusionCallCount);
-    fflush(stderr);
-    
-    dwVehicleIOSafetyState safetyState;
-    dwVehicleIONonSafetyState nonSafetyState;
-    dwVehicleIOActuationFeedback actuationFeedback;
+        
+        // Initialize trajectory from GPS even when vehicle is idle
+        if (m_poseHistory.empty()) {
+            fprintf(stderr, "   [fusion #%u] Initializing trajectory (first GPS fix)...\n", fusionCallCount);
+            fflush(stderr);
+            
+            Pose initialPose{};
+            initialPose.timestamp = gpsAnchor->first;
+            initialPose.rig2world = DW_IDENTITY_TRANSFORMATION3F;
+            initialPose.rpy[0] = initialPose.rpy[1] = initialPose.rpy[2] = 0.0f;
+            
+            memset(&initialPose.uncertainty, 0, sizeof(dwEgomotionUncertainty));
+            
+            m_poseHistory.push_back(initialPose);
+            m_shallRender = true;
+            
+            char buffer[256];
+            sprintf(buffer, " Trajectory initialized from GPS fix:\n"
+                            "  Location: [%.6f°N, %.6f°E, %.2fm ASL]\n"
+                            "  Timestamp: %lu µs\n"
+                            "  System ready for motion tracking.\n",
+                    gpsAnchor->second.latitude, 
+                    gpsAnchor->second.longitude, 
+                    gpsAnchor->second.altitude,
+                    gpsAnchor->first);
+            printColored(stdout, COLOR_GREEN, buffer);
+            
+            fprintf(stderr, "   [fusion #%u] Trajectory initialized\n", fusionCallCount);
+            fflush(stderr);
+        }
+        
+        dwTime_t anchorTimestamp = gpsAnchor->first;
+        
+        fprintf(stderr, "   [fusion #%u] Checking timestamp (anchor=%lu, lastProcessed=%lu)\n",
+                fusionCallCount, anchorTimestamp, m_temporalBuffers.lastProcessedTimestamp);
+        fflush(stderr);
+        
+        // Skip if we've already processed this timestamp
+        if (anchorTimestamp <= m_temporalBuffers.lastProcessedTimestamp) {
+            fprintf(stderr, "   [fusion #%u] Already processed, returning false\n", fusionCallCount);
+            fflush(stderr);
+            return false;
+        }
+        
+        fprintf(stderr, "   [fusion #%u] Finding IMU match...\n", fusionCallCount);
+        fflush(stderr);
+        
+        // Find temporally aligned IMU data
+        auto imuMatch = findClosestSensorData(m_temporalBuffers.imuBuffer, anchorTimestamp, TEMPORAL_WINDOW_US);
+        if (imuMatch == m_temporalBuffers.imuBuffer.end()) {
+            fprintf(stderr, "   [fusion #%u] No IMU match found, returning false\n", fusionCallCount);
+            fflush(stderr);
+            return false;
+        }
+        
+        fprintf(stderr, "   [fusion #%u] IMU match found: timestamp=%lu\n", 
+                fusionCallCount, imuMatch->first);
+        fflush(stderr);
+        
+        // Extract synchronized sensor frames
+        dwGPSFrame& gpsFrame = gpsAnchor->second;
+        dwIMUFrame& imuFrame = imuMatch->second;
 
-    bool canStateValid = m_canParser->getTemporallySynchronizedState(
-        &safetyState, &nonSafetyState, &actuationFeedback);
-    
-    fprintf(stderr, "   [fusion #%u] CAN state valid: %s\n", 
-            fusionCallCount, canStateValid ? "YES" : "NO");
-    fflush(stderr);
-    
-    if (canStateValid) {
-        fprintf(stderr, "   [fusion #%u] Processing CAN state...\n", fusionCallCount);
+        fprintf(stderr, "   [fusion #%u] Buffer data extracted:\n", fusionCallCount);
+        fprintf(stderr, "      GPS: [%.8f, %.8f, %.2fm] @ %lu\n",
+                gpsFrame.latitude, gpsFrame.longitude, gpsFrame.altitude, gpsFrame.timestamp_us);
+        fprintf(stderr, "      IMU: accel=[%.6f,%.6f,%.6f] gyro=[%.6f,%.6f,%.6f] @ %lu\n",
+                imuFrame.acceleration[0], imuFrame.acceleration[1], imuFrame.acceleration[2],
+                imuFrame.turnrate[0], imuFrame.turnrate[1], imuFrame.turnrate[2],
+                imuFrame.timestamp_us);
         fflush(stderr);
         
-        // Add whatever CAN processing was in the "(unchanged from original)" section
-        // For now, just log that we have it
+        // Update current sensor states for rendering/logging
+        m_currentGPSFrame = gpsFrame;
+        m_currentIMUFrame = imuFrame;
         
-        fprintf(stderr, "   [fusion #%u] CAN state processed\n", fusionCallCount);
+        fprintf(stderr, "   [fusion #%u] Processing synchronized sensor data...\n", fusionCallCount);
         fflush(stderr);
+        
+        // Feed synchronized data to egomotion
+        processSynchronizedSensorData(m_currentGPSFrame, imuFrame, anchorTimestamp);
+        
+        fprintf(stderr, "   [fusion #%u] Sensor data processed\n", fusionCallCount);
+        fflush(stderr);
+        
+        // Handle CAN data synchronization
+        fprintf(stderr, "   [fusion #%u] Getting CAN synchronized state...\n", fusionCallCount);
+        fflush(stderr);
+        
+        dwVehicleIOSafetyState safetyState;
+        dwVehicleIONonSafetyState nonSafetyState;
+        dwVehicleIOActuationFeedback actuationFeedback;
+
+        bool canStateValid = m_canParser->getTemporallySynchronizedState(
+            &safetyState, &nonSafetyState, &actuationFeedback);
+        
+        fprintf(stderr, "   [fusion #%u] CAN state valid: %s\n", 
+                fusionCallCount, canStateValid ? "YES" : "NO");
+        fflush(stderr);
+        
+        if (canStateValid) {
+            fprintf(stderr, "   [fusion #%u] CAN input:\n", fusionCallCount);
+            fprintf(stderr, "      speed=%.3f @ %lu, steering=%.3f @ %lu\n",
+                    nonSafetyState.speedESC, nonSafetyState.speedESCTimestamp,
+                    safetyState.steeringWheelAngle, safetyState.timestamp_us);
+            fflush(stderr);
+            
+            dwStatus status = dwEgomotion_addVehicleIOState(&safetyState,
+                                                            &nonSafetyState,
+                                                            &actuationFeedback,
+                                                            m_egomotion);
+            if (status != DW_SUCCESS) {
+                fprintf(stderr, "   [fusion #%u] Failed to add vehicle state: %d\n", 
+                        fusionCallCount, status);
+            } else {
+                fprintf(stderr, "   [fusion #%u] Successfully fed CAN to egomotion\n", 
+                        fusionCallCount);
+            }
+            
+            fprintf(stderr, "   [fusion #%u] CAN state processed\n", fusionCallCount);
+            fflush(stderr);
+        }
+        
+        fprintf(stderr, "   [fusion #%u] Updating last processed timestamp...\n", fusionCallCount);
+        fflush(stderr);
+        
+        m_temporalBuffers.lastProcessedTimestamp = anchorTimestamp;
+        m_elapsedTime = anchorTimestamp - m_firstTimestamp;
+        
+        fprintf(stderr, "   [fusion #%u] Returning TRUE\n", fusionCallCount);
+        fflush(stderr);
+        
+        return true;
     }
-    
-    fprintf(stderr, "   [fusion #%u] Updating last processed timestamp...\n", fusionCallCount);
-    fflush(stderr);
-    
-    m_temporalBuffers.lastProcessedTimestamp = anchorTimestamp;
-    m_elapsedTime = anchorTimestamp - m_firstTimestamp;
-    
-    fprintf(stderr, "   [fusion #%u] Returning TRUE\n", fusionCallCount);
-    fflush(stderr);
-    
-    return true;
-}
     
     /**
-     * Processes synchronized GPS and IMU data (equivalent to original immediate processing)
+     * Processes synchronized GPS and IMU data
      */
     void processSynchronizedSensorData(const dwGPSFrame& gpsFrame, const dwIMUFrame& imuFrame, dwTime_t timestamp) {
         // GPS processing (from original immediate processing)
         m_trajectoryLog.addWGS84("GPS", gpsFrame);
-        CHECK_DW_ERROR(dwGlobalEgomotion_addGPSMeasurement(&gpsFrame, m_globalEgomotion));
-        
-        // IMU processing (from original immediate processing)  
+            fprintf(stderr, "      [procSync] Feeding to APIs:\n");
+            fprintf(stderr, "         GPS input: [%.8f, %.8f] @ %lu\n",
+                    gpsFrame.latitude, gpsFrame.longitude, gpsFrame.timestamp_us);
+            fflush(stderr);
+            
+            dwStatus gpsStatus = dwGlobalEgomotion_addGPSMeasurement(&gpsFrame, m_globalEgomotion);
+            fprintf(stderr, "         GPS result: %d (%s)\n", gpsStatus, dwGetStatusName(gpsStatus));
+            fflush(stderr);
+
         if (m_egomotionParameters.motionModel != DW_EGOMOTION_ODOMETRY) {
+            fprintf(stderr, "         IMU input: accel_mag=%.6f gyro_mag=%.6f @ %lu\n",
+                    sqrtf(imuFrame.acceleration[0]*imuFrame.acceleration[0] + 
+                        imuFrame.acceleration[1]*imuFrame.acceleration[1] + 
+                        imuFrame.acceleration[2]*imuFrame.acceleration[2]),
+                    sqrtf(imuFrame.turnrate[0]*imuFrame.turnrate[0] + 
+                        imuFrame.turnrate[1]*imuFrame.turnrate[1] + 
+                        imuFrame.turnrate[2]*imuFrame.turnrate[2]),
+                    imuFrame.timestamp_us);
+            fflush(stderr);
+            
             dwEgomotion_addIMUMeasurement(&imuFrame, m_egomotion);
+            dwStatus imuStatus = dwEgomotion_addIMUMeasurement(&imuFrame, m_egomotion);
+                fprintf(stderr, "         IMU result: %d (%s)\n", imuStatus, dwGetStatusName(imuStatus));
+                fflush(stderr);
         }
         
-        // Rate-limited sensor logging (preserve original 5Hz logging rate)
         static dwTime_t lastGpsLog = 0, lastImuLog = 0;
         
         if (allowEvery(timestamp, lastGpsLog, 200000)) {
