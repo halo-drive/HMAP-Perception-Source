@@ -1,0 +1,17 @@
+{
+    "rig": {
+        "sensors": [
+            { "json-merge": "camera/camera-front-gmsl.json" },
+            { "json-merge": "camera/camera-right-gmsl.json" },
+            { "json-merge": "camera/camera-left-gmsl.json" },
+            { "json-merge": "camera/camera-back-gmsl.json" },
+	    { "json-merge": "lidar/lidar_front.json"},
+            { "json-merge": "lidar/lidar_rear.json"},
+	    { "json-merge": "novatel/imu-novatel.json"},
+	    { "json-merge": "novatel/gps-novatel.json"},
+	    { "json-merge": "canbus/can1.json"}
+        ],
+        "vehicle": { "json-merge": "vehicle/vehicle-kia-eniro.json" }
+    },
+    "version": 6
+}

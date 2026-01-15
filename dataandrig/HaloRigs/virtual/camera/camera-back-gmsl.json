@@ -1,0 +1,22 @@
+{
+    "name": "camera_back",
+    "correction_rig_T": [0.0, 0.0, 0.0],
+    "correction_sensor_R_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0]
+    },
+    "nominalSensor2Rig_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0],
+        "t": [1.8621, -0.1939, 1.3165]
+    },
+    "properties": {
+        "Model": "ftheta",
+        "bw-poly": "0.000000000000000 5.35356812179089e-4 4.99266072928606e-10 4.27370422037554e-12 -6.68245573791717e-16",
+        "cx": "1927.764404",
+        "cy": "1096.686646",
+        "height": "2168",
+        "width": "3848"
+    },
+    "parameter": "video=/path/to/camera_back.mp4,create_seek=1,output-timestamp=synced",
+    "protocol": "camera.virtual"
+}
+

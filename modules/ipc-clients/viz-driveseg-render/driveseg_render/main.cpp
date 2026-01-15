@@ -17,7 +17,6 @@
 #include <vector>
 
 #include <cuda_runtime.h>
-#include <GLFW/glfw3.h>
 
 // ---------------- DriveWorks ----------------
 #include <dw/core/base/Types.h>
@@ -79,23 +78,23 @@ struct DetectionBox {
 struct ReceivedFrame {
     uint32_t cameraIndex;
     uint64_t frameId;
-    
+
     // Image
     uint32_t width;
     uint32_t height;
     uint32_t stride;
     std::vector<uint8_t> rgbaPixels;
-    
+
     // Detections
     std::vector<dwRectf> boxes;
     std::vector<std::string> labels;
-    
+
     // Stats
     uint32_t segCount;
     uint32_t detCount;
     float avgSegMs;
     float avgDetMs;
-    
+
     bool valid{false};
 };
 
@@ -305,11 +304,11 @@ void DriveSeg4CamClient::initImages()
 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         CHECK_DW_ERROR(dwImage_create(&m_imgCUDA[i], cudaProps, m_ctx));
-        
+
         // Initialize CUDA→GL streamer (same as original)
         CHECK_DW_ERROR(dwImageStreamerGL_initialize(&m_streamerToGL[i], &cudaProps, DW_IMAGE_GL, m_ctx));
     }
-    
+
     std::cout << "[Client] CUDA images initialized\n";
 }
 
@@ -320,20 +319,20 @@ void DriveSeg4CamClient::initSocketClient()
 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         uint16_t port = m_serverPort + i;
-        
+
         CHECK_DW_ERROR(dwSocketClient_initialize(&m_socketClients[i], 1, m_ctx));
-        
+
         std::cout << "[IPC] Connecting camera " << i << " to port " << port << "...\n";
-        
+
         dwStatus status = DW_TIME_OUT;
         int attempts = 0;
-        
+
         while (status == DW_TIME_OUT && attempts < 30) {
-            status = dwSocketClient_connect(&m_connections[i], m_serverIP.c_str(), 
+            status = dwSocketClient_connect(&m_connections[i], m_serverIP.c_str(),
                                            port, 1000, m_socketClients[i]);
             attempts++;
         }
-        
+
         if (status == DW_SUCCESS) {
             std::cout << "[IPC] Camera " << i << " connected to port " << port << "\n";
         } else {
@@ -363,37 +362,94 @@ void DriveSeg4CamClient::receiveThreadFunc(uint32_t camIndex)
     std::cout << "[Receive Thread " << camIndex << "] Stopped\n";
 }
 
+
 bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
 {
     if (!m_connections[camIndex]) return false;
 
-    // Receive header
+    // ========================================
+    // STEP 1: Peek at header to verify magic
+    // ========================================
     FrameHeader header{};
-    size_t headerSize = sizeof(FrameHeader);
-    dwStatus status = dwSocketConnection_read(
+    size_t peekSize = sizeof(FrameHeader);
+
+    dwStatus status = dwSocketConnection_peek(
         reinterpret_cast<uint8_t*>(&header),
-        &headerSize,
+        &peekSize,
         5000,  // 5 second timeout
         m_connections[camIndex]
     );
 
     if (status != DW_SUCCESS) {
         if (status != DW_TIME_OUT) {
-            std::cout << "[Client] Read header failed for cam " << camIndex 
+            std::cout << "[Client] Peek header failed for cam " << camIndex
                       << ": " << dwGetStatusName(status) << "\n";
         }
         return false;
     }
 
-    if (headerSize != sizeof(FrameHeader)) {
-        std::cout << "[Client] Incomplete header for cam " << camIndex << "\n";
+    if (peekSize != sizeof(FrameHeader)) {
+        std::cout << "[Client] Incomplete header peek for cam " << camIndex
+                  << " (got " << peekSize << " bytes)\n";
         return false;
     }
 
+    // ========================================
+    // STEP 2: Check if header is valid
+    // ========================================
     if (header.magic != 0xDEADBEEF) {
-        std::cout << "[Client] Invalid frame magic for cam " << camIndex << "\n";
+        std::cout << "[Client] Invalid magic during peek for cam " << camIndex
+                  << " (got 0x" << std::hex << header.magic << std::dec << ")\n";
+
+        // Try to resync: read and discard 1 byte at a time until we find magic
+        std::cout << "[Client] Attempting resync for cam " << camIndex << "...\n";
+
+        for (int attempts = 0; attempts < 1000; ++attempts) {
+            uint8_t discard;
+            size_t discardSize = 1;
+            dwSocketConnection_read(&discard, &discardSize, 1000, m_connections[camIndex]);
+
+            // Peek again
+            peekSize = sizeof(FrameHeader);
+            status = dwSocketConnection_peek(
+                reinterpret_cast<uint8_t*>(&header),
+                &peekSize,
+                1000,
+                m_connections[camIndex]
+            );
+
+            if (status == DW_SUCCESS && peekSize == sizeof(FrameHeader) && header.magic == 0xDEADBEEF) {
+                std::cout << "[Client] Resync successful for cam " << camIndex
+                          << " after " << attempts << " bytes\n";
+                break;
+            }
+        }
+
+        // Try one more time
+        if (header.magic != 0xDEADBEEF) {
+            std::cout << "[Client] Resync failed for cam " << camIndex << "\n";
+            return false;
+        }
+    }
+
+    // ========================================
+    // STEP 3: Now actually READ the header
+    // ========================================
+    size_t headerSize = sizeof(FrameHeader);
+    status = dwSocketConnection_read(
+        reinterpret_cast<uint8_t*>(&header),
+        &headerSize,
+        5000,
+        m_connections[camIndex]
+    );
+
+    if (status != DW_SUCCESS || headerSize != sizeof(FrameHeader)) {
+        std::cout << "[Client] Failed to read verified header for cam " << camIndex << "\n";
         return false;
     }
+
+    std::cout << "[Client] Cam " << camIndex << " frame " << header.frameId
+              << " | Image: " << header.imageDataSize << " bytes\n";
 
     // Populate frame metadata
     frame.cameraIndex = header.cameraIndex;
@@ -406,22 +462,64 @@ bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
     frame.avgSegMs = header.avgSegMs;
     frame.avgDetMs = header.avgDetMs;
 
-    // Receive image data
+    // ========================================
+    // STEP 4: Receive image data with retry
+    // ========================================
     frame.rgbaPixels.resize(header.imageDataSize);
-    size_t imageSize = header.imageDataSize;
-    status = dwSocketConnection_read(
-        frame.rgbaPixels.data(),
-        &imageSize,
-        5000,
-        m_connections[camIndex]
-    );
+    size_t totalReceived = 0;
+    uint8_t* dataPtr = frame.rgbaPixels.data();
 
-    if (status != DW_SUCCESS || imageSize != header.imageDataSize) {
-        std::cout << "[Client] Failed to receive image for cam " << camIndex << "\n";
+    int maxRetries = 5;
+    int retryCount = 0;
+
+    while (totalReceived < header.imageDataSize && retryCount < maxRetries) {
+        size_t remaining = header.imageDataSize - totalReceived;
+        size_t toRead = remaining;  // Try to read all remaining
+        size_t bytesRead = toRead;
+
+        status = dwSocketConnection_read(
+            dataPtr + totalReceived,
+            &bytesRead,
+            20000,  // 20 second timeout for large transfers
+            m_connections[camIndex]
+        );
+
+        if (status == DW_SUCCESS) {
+            totalReceived += bytesRead;
+            retryCount = 0;  // Reset retry counter on success
+
+            if (bytesRead == 0) {
+                std::cout << "[Client] Cam " << camIndex << " connection closed\n";
+                return false;
+            }
+        } else if (status == DW_TIME_OUT) {
+            retryCount++;
+            std::cout << "[Client] Cam " << camIndex << " image read timeout (attempt "
+                      << retryCount << "/" << maxRetries << ")"
+                      << " | Received: " << totalReceived << "/" << header.imageDataSize << "\n";
+
+            if (retryCount >= maxRetries) {
+                std::cout << "[Client] Cam " << camIndex << " failed after " << maxRetries
+                          << " retries | Aborting frame\n";
+                return false;
+            }
+            // Continue loop to retry
+        } else {
+            std::cout << "[Client] Cam " << camIndex << " image read failed: "
+                      << dwGetStatusName(status) << "\n";
+            return false;
+        }
+    }
+
+    if (totalReceived != header.imageDataSize) {
+        std::cout << "[Client] Cam " << camIndex << " incomplete image: "
+                  << totalReceived << "/" << header.imageDataSize << " bytes\n";
         return false;
     }
 
-    // Receive detection boxes
+    // ========================================
+    // STEP 5: Receive detection boxes
+    // ========================================
     frame.boxes.clear();
     frame.labels.clear();
     frame.boxes.reserve(header.numBoxes);
@@ -473,9 +571,9 @@ void DriveSeg4CamClient::renderCamera(uint32_t i)
 
     // Check if we need to resize the image
     if (cudaImg->prop.width != frame.width || cudaImg->prop.height != frame.height) {
-        std::cout << "[Client] Resizing camera " << i << " to " 
+        std::cout << "[Client] Resizing camera " << i << " to "
                   << frame.width << "x" << frame.height << "\n";
-        
+
         // Recreate image with correct dimensions
         dwImageStreamerGL_release(m_streamerToGL[i]);
         dwImage_destroy(m_imgCUDA[i]);
@@ -506,10 +604,10 @@ void DriveSeg4CamClient::renderCamera(uint32_t i)
 
     // Stream CUDA image to GL (same as original)
     CHECK_DW_ERROR(dwImageStreamerGL_producerSend(m_imgCUDA[i], m_streamerToGL[i]));
-    
+
     dwImageHandle_t frameGL{};
     CHECK_DW_ERROR(dwImageStreamerGL_consumerReceive(&frameGL, 33000, m_streamerToGL[i]));
-    
+
     dwImageGL* imageGL{};
     CHECK_DW_ERROR(dwImage_getGL(&imageGL, frameGL));
 
@@ -526,7 +624,7 @@ void DriveSeg4CamClient::renderCamera(uint32_t i)
     CHECK_DW_ERROR(dwRenderEngine_setColor({1, 1, 1, 1}, m_re));
     char buf[256];
     std::snprintf(buf, sizeof(buf), "Cam %u | Frame:%lu Det:%u(%.1fms) Seg:%u(%.1fms) Boxes:%zu",
-                  i, frame.frameId, frame.detCount, frame.avgDetMs, 
+                  i, frame.frameId, frame.detCount, frame.avgDetMs,
                   frame.segCount, frame.avgSegMs, frame.boxes.size());
     CHECK_DW_ERROR(dwRenderEngine_renderText2D(buf, {16, 28}, m_re));
 
@@ -562,7 +660,7 @@ void DriveSeg4CamClient::printStats()
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         std::lock_guard<std::mutex> lock(m_frameMutex[i]);
         if (m_latestFrames[i].valid) {
-            std::cout << "  Cam" << i 
+            std::cout << "  Cam" << i
                       << " | Latest frame: " << m_latestFrames[i].frameId
                       << " | Boxes: " << m_latestFrames[i].boxes.size() << "\n";
         } else {
@@ -615,9 +713,9 @@ int main(int argc, const char** argv)
         DriveSeg4CamClient app(args);
         app.initializeWindow("DriveSeg4Cam Client", 1280, 800, args.enabled("offscreen"));
         if (!args.enabled("offscreen")) app.setProcessRate(30);
-        
+
         return app.run();
-        
+
     } catch (const std::exception& e) {
         std::cerr << "[Client] Exception: " << e.what() << "\n";
         return -1;

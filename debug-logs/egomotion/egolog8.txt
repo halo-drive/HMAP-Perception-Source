@@ -1,0 +1,979 @@
+ProgramArguments: Missing argument 'dwTracePath' requested
+GLFW error: 65544, X11: RandR monitor support seems broken
+Starting real-time egomotion processing at 100 Hz...
+Sensor drainage budget: 5ms per cycle
+Expected sensor rates: CAN=50Hz, IMU=100Hz, GPS=10Hz, Camera=30Hz
+[13-01-2026 13:25:31] Platform: Detected Drive Orin P3710
+[13-01-2026 13:25:31] Platform: currently selected GPU device integrated ID 0
+[13-01-2026 13:25:32] Context::findResourcesPackageInPathWalk: Could not find ./resources/resources.pak in upto 7 parent directories from /usr/local/driveworks-5.20/targets/aarch64-Linux/lib/libdw_base.so.5.20
+[13-01-2026 13:25:32] Context::findResourcesPackageInPathWalk: Could not find ./resources/resources.pak in upto 7 parent directories from /usr/local/driveworks-5.20/targets/aarch64-Linux/lib/libdw_base.so.5.20
+[13-01-2026 13:25:32] [13-01-2026 13:25:32] Initialize DriveWorks SDK v5.20.24
+[13-01-2026 13:25:32] [13-01-2026 13:25:32] Release build with GNU 9.3.0 from buildbrain-branch-0-gb4c0b405b15 against Drive PDK v6.0.10.0
+[13-01-2026 13:25:32] createFromVehicleVIN: Failed to open a file '/tmp/car_vin' - file likely does not exist - skipping overlay
+[13-01-2026 13:25:32] No valid data file found for can in parameter string: device=can1,bitrate=500000,type=native (using configuration folder /usr/local/driveworks/data/halorigs/live/)
+[13-01-2026 13:25:32] No valid data file found for imu:novatel in parameter string: connection-type=ethernet,ip=192.168.1.153,port=2000,fifo-size=4096 (using configuration folder /usr/local/driveworks/data/halorigs/live/)
+[13-01-2026 13:25:32] No valid data file found for gps:novatel in parameter string: connection-type=ethernet,ip=192.168.1.153,port=2000,fifo-size=4096 (using configuration folder /usr/local/driveworks/data/halorigs/live/)
+[13-01-2026 13:25:32] createFromVehicleVIN: Failed to open a file '/tmp/car_vin' - file likely does not exist - skipping overlay
+[SENSORS IN RIG] Vehicle CAN interface found: can
+[SENSORS IN RIG] IMU Sensor found: imu:novatel
+[SENSORS IN RIG] GPS Sensor found: gps:novatel
+Camera sensor not found - no video display will be available
+[13-01-2026 13:25:32] Egomotion: slip angle coefficient computed from vehicle params: -0.014475
+[13-01-2026 13:25:32] Egomotion: likely invalid slip angle coefficient, should not be lower than -0.010000
+[13-01-2026 13:25:32] Using default slip angle coefficient: -0.002830
+[13-01-2026 13:25:32] Can not create time sensor: DW_HAL_CANNOT_OPEN_CHANNEL: EndpointNVPPS: cannot open NVPPS device with name: /dev/nvpps0
+ Error: Permission denied
+SygnalPomoParser: Synchronized structures initialized
+SygnalPomoParser: Real-time synchronized parser initialized
+SygnalPomoParser: Real-time configuration loaded successfully
+  Temporal window: 25000 µs, Commit interval: 10000 µs
+SygnalPomoParser: Speed measurement type configured: REAR_WHEEL_SPEED
+SYGNALPOMO CAN PARSER initialized successfully
+CAN-ID Config: Speed=0x4F1, Steering=0x2B0, Wheels=0x386
+Real-time Egomotion sample initialized successfully
+🟢 [12825363125] ENTER onProcess()
+🟢 [12825363131] processCount=0
+🟢 [12825363131] First onProcess call, set heartbeatStart
+💓 Main loop: 1 cycles, inf Hz actual (target 100 Hz)
+🟢 [12825363131] About to call drainSensorEventsToBuffers()
+🔵 [12825363146] ENTER drainSensorEventsToBuffers()
+🔄 Drainage loop: 1 calls, inf Hz
+📡 Sensor events (last 1s): CAN=0, IMU=0, GPS=0, Camera=0 | Timer delta=12825.4 s
+⚠️ WARNING: No sensor events drained in last second!
+🔵 Event #0: type=IMU (3), sensorIndex=1, timestamp=1768252321767528
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=1
+🔵 Event #1: type=IMU (3), sensorIndex=1, timestamp=1768252321767570
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=2
+🔵 Event #2: type=IMU (3), sensorIndex=1, timestamp=1768252321768529
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=3
+🔵 Event #3: type=IMU (3), sensorIndex=1, timestamp=1768252321769069
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=4
+🔵 Event #4: type=IMU (3), sensorIndex=1, timestamp=1768252321770529
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=5
+🔵 Event #5: type=GPS (2), sensorIndex=2, timestamp=1768252321770529
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=1
+🔵 Event #6: type=IMU (3), sensorIndex=1, timestamp=1768252321770557
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=6
+🔵 Event #7: type=IMU (3), sensorIndex=1, timestamp=1768252321771792
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=7
+🔵 Event #8: type=IMU (3), sensorIndex=1, timestamp=1768252321772532
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=8
+🔵 Event #9: type=GPS (2), sensorIndex=2, timestamp=1768252321772532
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=2
+🔵 Event #10: type=IMU (3), sensorIndex=1, timestamp=1768252321774263
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=9
+🔵 Event #11: type=IMU (3), sensorIndex=1, timestamp=1768252321775406
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=10
+🔵 Event #12: type=GPS (2), sensorIndex=2, timestamp=1768252321775406
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=3
+🔵 Event #13: type=IMU (3), sensorIndex=1, timestamp=1768252321775431
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=11
+🔵 Event #14: type=IMU (3), sensorIndex=1, timestamp=1768252321776074
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=12
+🔵 Event #15: type=GPS (2), sensorIndex=2, timestamp=1768252321776074
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=4
+🔵 Event #16: type=IMU (3), sensorIndex=1, timestamp=1768252321776099
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=13
+🔵 Event #17: type=IMU (3), sensorIndex=1, timestamp=1768252321777180
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=14
+🔵 Event #18: type=IMU (3), sensorIndex=1, timestamp=1768252321778475
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=15
+🔵 Event #21: type=IMU (3), sensorIndex=1, timestamp=1768252321779740
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=16
+🔵 Event #22: type=IMU (3), sensorIndex=1, timestamp=1768252321780262
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=17
+🔵 Event #27: type=IMU (3), sensorIndex=1, timestamp=1768252321782846
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=18
+🔵 Event #28: type=IMU (3), sensorIndex=1, timestamp=1768252321783600
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=19
+🔵 Event #29: type=IMU (3), sensorIndex=1, timestamp=1768252321783646
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=20
+🔵 Event #30: type=IMU (3), sensorIndex=1, timestamp=1768252321784968
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=21
+🔵 Event #31: type=GPS (2), sensorIndex=2, timestamp=1768252321784968
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=5
+🔵 Event #34: type=IMU (3), sensorIndex=1, timestamp=1768252321787804
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=22
+🔵 Event #35: type=IMU (3), sensorIndex=1, timestamp=1768252321787829
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=23
+🔵 Event #36: type=GPS (2), sensorIndex=2, timestamp=1768252321787829
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=6
+🔵 Event #37: type=IMU (3), sensorIndex=1, timestamp=1768252321788396
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=24
+🔵 Event #38: type=IMU (3), sensorIndex=1, timestamp=1768252321788422
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=25
+🔵 Event #39: type=IMU (3), sensorIndex=1, timestamp=1768252321788949
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=26
+🔵 Event #40: type=GPS (2), sensorIndex=2, timestamp=1768252321788949
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=7
+🔵 Event #41: type=IMU (3), sensorIndex=1, timestamp=1768252321788974
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=27
+🔵 Event #42: type=IMU (3), sensorIndex=1, timestamp=1768252321789588
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=28
+🔵 Event #43: type=GPS (2), sensorIndex=2, timestamp=1768252321789588
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=8
+🔵 Event #44: type=IMU (3), sensorIndex=1, timestamp=1768252321789608
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=29
+🔵 Event #45: type=IMU (3), sensorIndex=1, timestamp=1768252321790266
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=30
+🔵 Event #46: type=GPS (2), sensorIndex=2, timestamp=1768252321790266
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=9
+🔵 Event #47: type=IMU (3), sensorIndex=1, timestamp=1768252321790294
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=31
+🔵 Event #48: type=IMU (3), sensorIndex=1, timestamp=1768252321790877
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=32
+🔵 Event #49: type=GPS (2), sensorIndex=2, timestamp=1768252321790877
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=10
+🔵 Event #50: type=IMU (3), sensorIndex=1, timestamp=1768252321790903
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=33
+🔵 Event #51: type=IMU (3), sensorIndex=1, timestamp=1768252321791695
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=34
+🔵 Event #52: type=GPS (2), sensorIndex=2, timestamp=1768252321791695
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=11
+🔵 Event #53: type=IMU (3), sensorIndex=1, timestamp=1768252321791723
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=35
+🔵 Event #54: type=IMU (3), sensorIndex=1, timestamp=1768252321792267
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=36
+🔵 Event #55: type=IMU (3), sensorIndex=1, timestamp=1768252321792859
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=37
+🔵 Event #56: type=GPS (2), sensorIndex=2, timestamp=1768252321792859
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=12
+🔵 Event #57: type=IMU (3), sensorIndex=1, timestamp=1768252321792886
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=38
+🔵 Event #58: type=IMU (3), sensorIndex=1, timestamp=1768252321794223
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=39
+🔵 Event #59: type=GPS (2), sensorIndex=2, timestamp=1768252321794223
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=13
+🔵 Event #60: type=IMU (3), sensorIndex=1, timestamp=1768252321794251
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=40
+🔵 Event #61: type=IMU (3), sensorIndex=1, timestamp=1768252321795721
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=41
+🔵 Event #62: type=GPS (2), sensorIndex=2, timestamp=1768252321795721
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=14
+🔵 Event #63: type=IMU (3), sensorIndex=1, timestamp=1768252321795738
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=42
+🔵 Event #64: type=IMU (3), sensorIndex=1, timestamp=1768252321795763
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=43
+🔵 Event #65: type=IMU (3), sensorIndex=1, timestamp=1768252321796616
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=44
+🔵 Event #66: type=GPS (2), sensorIndex=2, timestamp=1768252321796616
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=15
+🔵 Event #67: type=IMU (3), sensorIndex=1, timestamp=1768252321797158
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=45
+🔵 Event #68: type=IMU (3), sensorIndex=1, timestamp=1768252321797185
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=46
+🔵 Event #69: type=GPS (2), sensorIndex=2, timestamp=1768252321797185
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=16
+🔵 Event #70: type=IMU (3), sensorIndex=1, timestamp=1768252321797759
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=47
+🔵 Event #71: type=IMU (3), sensorIndex=1, timestamp=1768252321797779
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=48
+🔵 Event #72: type=GPS (2), sensorIndex=2, timestamp=1768252321797779
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=17
+🔵 Event #73: type=IMU (3), sensorIndex=1, timestamp=1768252321797804
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=49
+🔵 Event #74: type=IMU (3), sensorIndex=1, timestamp=1768252321798605
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=50
+🔵 Event #75: type=GPS (2), sensorIndex=2, timestamp=1768252321798605
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=18
+🔵 Event #76: type=IMU (3), sensorIndex=1, timestamp=1768252321798623
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=51
+🔵 Event #77: type=IMU (3), sensorIndex=1, timestamp=1768252321799262
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=52
+🔵 Event #78: type=IMU (3), sensorIndex=1, timestamp=1768252321799288
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=53
+🔵 Event #79: type=GPS (2), sensorIndex=2, timestamp=1768252321799288
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=19
+🔵 Event #80: type=IMU (3), sensorIndex=1, timestamp=1768252321799874
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=54
+🔵 Event #81: type=IMU (3), sensorIndex=1, timestamp=1768252321800458
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=55
+🔵 Event #82: type=GPS (2), sensorIndex=2, timestamp=1768252321800458
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=20
+🔵 Event #83: type=IMU (3), sensorIndex=1, timestamp=1768252321801048
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=56
+🔵 Event #84: type=IMU (3), sensorIndex=1, timestamp=1768252321801073
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=57
+🔵 Event #85: type=GPS (2), sensorIndex=2, timestamp=1768252321801073
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=21
+🔵 Event #86: type=IMU (3), sensorIndex=1, timestamp=1768252321802073
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=58
+🔵 Event #87: type=IMU (3), sensorIndex=1, timestamp=1768252321802100
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=59
+🔵 Event #88: type=GPS (2), sensorIndex=2, timestamp=1768252321802100
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=22
+🔵 Event #89: type=IMU (3), sensorIndex=1, timestamp=1768252321802881
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=60
+🔵 Event #90: type=IMU (3), sensorIndex=1, timestamp=1768252321802907
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=61
+🔵 Event #91: type=GPS (2), sensorIndex=2, timestamp=1768252321802907
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=23
+🔵 Event #92: type=IMU (3), sensorIndex=1, timestamp=1768252321803807
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=62
+🔵 Event #93: type=IMU (3), sensorIndex=1, timestamp=1768252321803825
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=63
+🔵 Event #94: type=IMU (3), sensorIndex=1, timestamp=1768252321804484
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=64
+🔵 Event #95: type=GPS (2), sensorIndex=2, timestamp=1768252321804484
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=24
+🔵 Event #96: type=IMU (3), sensorIndex=1, timestamp=1768252321804510
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=65
+🔵 Event #97: type=IMU (3), sensorIndex=1, timestamp=1768252321805769
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=66
+🔵 Event #98: type=GPS (2), sensorIndex=2, timestamp=1768252321805769
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=25
+🔵 Event #99: type=IMU (3), sensorIndex=1, timestamp=1768252321805788
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=67
+🔵 Event #100: type=IMU (3), sensorIndex=1, timestamp=1768252321805814
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=68
+🔵 Event #101: type=GPS (2), sensorIndex=2, timestamp=1768252321805814
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=26
+🔵 Event #102: type=IMU (3), sensorIndex=1, timestamp=1768252321806377
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=69
+🔵 Event #103: type=IMU (3), sensorIndex=1, timestamp=1768252321806404
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=70
+🔵 Event #104: type=GPS (2), sensorIndex=2, timestamp=1768252321806404
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=27
+🔵 Event #105: type=IMU (3), sensorIndex=1, timestamp=1768252321806956
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=71
+🔵 Event #106: type=IMU (3), sensorIndex=1, timestamp=1768252321806980
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=72
+🔵 Event #107: type=IMU (3), sensorIndex=1, timestamp=1768252321807637
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=73
+🔵 Event #108: type=GPS (2), sensorIndex=2, timestamp=1768252321807637
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=28
+🔵 Event #109: type=IMU (3), sensorIndex=1, timestamp=1768252321807657
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=74
+🔵 Event #110: type=IMU (3), sensorIndex=1, timestamp=1768252321808298
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=75
+🔵 Event #111: type=GPS (2), sensorIndex=2, timestamp=1768252321808298
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=29
+🔵 Event #112: type=IMU (3), sensorIndex=1, timestamp=1768252321808614
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=76
+🔵 Event #113: type=IMU (3), sensorIndex=1, timestamp=1768252321808639
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=77
+🔵 Event #114: type=GPS (2), sensorIndex=2, timestamp=1768252321808639
+🔵 >> GPS event! sensorIndex=2, m_gpsSensorIdx=2
+🔵 >> GPS buffered! gpsUpdates.size()=30
+🔵 Event #115: type=IMU (3), sensorIndex=1, timestamp=1768252321809928
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=78
+🔵 Event #116: type=IMU (3), sensorIndex=1, timestamp=1768252321809955
+🔵 >> IMU event! sensorIndex=1, m_imuSensorIdx=1
+🔵 >> IMU buffered! imuUpdates.size()=79
+🔵 Drainage summary: drained=117 total, GPS=30, IMU=79, CAN=8
+🔵 Applying batch updates to temporal buffers
+🔵 Temporal buffers now contain: GPS=30, IMU=79, CAN=8 entries
+🔵 [12825368228] EXIT drainSensorEventsToBuffers()
+🟢 [12825363131] Returned from drainSensorEventsToBuffers()
+🟢 [12825363131] Checking fusion (lastFusion=0, current=12825363131, diff=12825363131, threshold=50000)
+🟢 [12825363131] Calling attemptTemporalFusion()
+✓ Trajectory initialized from GPS fix:
+  Location: [55.849485°N, -4.219195°E, 65.38m ASL]
+  Timestamp: 1768252321808639 µs
+  System ready for motion tracking.
+GPS Data: Lat=55.849485°, Lon=-4.219195°, Alt=65.38m, Speed=0.00m/s, Timestamp=1768252321808639
+IMU Data: Accel=[0.000, 0.000, 0.000] m/s², Gyro=[0.000, 0.000, 0.000] rad/s, Timestamp=1768252321808639
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:34] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full
+[13-01-2026 13:25:35] EndpointNovatel: subscriber NovatelEthernet experiencing data loss, buffer is full

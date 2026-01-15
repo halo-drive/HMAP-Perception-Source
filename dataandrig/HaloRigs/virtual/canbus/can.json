@@ -1,0 +1,17 @@
+{
+    "name": "can",
+    "correction_rig_T": [0.0, 0.0, 0.0],
+    "correction_sensor_R_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0]
+    },
+    "nominalSensor2Rig_FLU": {
+        "roll-pitch-yaw": [0.0, 0.0, 0.0],
+        "t": [0.0, 0.0, 0.0]
+    },
+    "parameter": "file=/home/benchdev2/recorded/",
+    "properties": {
+        "velocity_latency": "0.020",
+        "velocity_factor": "1.0"
+    },
+    "protocol": "can.virtual"
+}

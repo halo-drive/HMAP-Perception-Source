@@ -157,7 +157,16 @@ private:
     uint32_t m_gpsSensorIdx      = 0;
 
     const dwSensorEvent* acquiredEvent = nullptr;
+    
+    struct PendingCameraFrame {
+        dwImageHandle_t cudaImage;  // CUDA frame handle (not event pointer for safety)
+        dwTime_t timestamp;
+    };
+    std::deque<PendingCameraFrame> m_pendingCameraFrames;
+    std::mutex m_cameraQueueMutex;
+    static constexpr size_t MAX_PENDING_CAMERA_FRAMES = 5;    
 
+    
     // ------------------------------------------------
     // Real-time processing variables
     // ------------------------------------------------
@@ -202,186 +211,198 @@ private:
      * @return true if fusion was successful, false if waiting for more data
      */
     bool attemptTemporalFusion(dwTime_t currentTime) {
+        static uint32_t fusionCallCount = 0;
+        ++fusionCallCount;
+        
+        fprintf(stderr, "   [fusion #%u] START: currentTime=%lu\n", fusionCallCount, currentTime);
+        fflush(stderr);
+        
+        fprintf(stderr, "   [fusion #%u] Acquiring buffer mutex...\n", fusionCallCount);
+        fflush(stderr);
+        
         std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
         
-        // Find GPS anchor point (slowest sensor drives fusion timing)
+        fprintf(stderr, "   [fusion #%u] Mutex acquired, finding GPS anchor...\n", fusionCallCount);
+        fflush(stderr);
+        
+        // Find GPS anchor point (fusion cadence)
         auto gpsAnchor = findLatestValidGPS(currentTime);
         if (gpsAnchor == m_temporalBuffers.gpsBuffer.end()) {
-            return false; // No GPS data available yet
+            fprintf(stderr, "   [fusion #%u] No GPS anchor found, returning false\n", fusionCallCount);
+            fflush(stderr);
+            return false;
+        }
+        
+        fprintf(stderr, "   [fusion #%u] GPS anchor found: timestamp=%lu\n", 
+                fusionCallCount, gpsAnchor->first);
+        fflush(stderr);
+        
+        // Initialize trajectory from GPS even when vehicle is idle
+        if (m_poseHistory.empty()) {
+            fprintf(stderr, "   [fusion #%u] Initializing trajectory (first GPS fix)...\n", fusionCallCount);
+            fflush(stderr);
+            
+            Pose initialPose{};
+            initialPose.timestamp = gpsAnchor->first;
+            initialPose.rig2world = DW_IDENTITY_TRANSFORMATION3F;
+            initialPose.rpy[0] = initialPose.rpy[1] = initialPose.rpy[2] = 0.0f;
+            
+            memset(&initialPose.uncertainty, 0, sizeof(dwEgomotionUncertainty));
+            
+            m_poseHistory.push_back(initialPose);
+            m_shallRender = true;
+            
+            char buffer[256];
+            sprintf(buffer, " Trajectory initialized from GPS fix:\n"
+                            "  Location: [%.6f°N, %.6f°E, %.2fm ASL]\n"
+                            "  Timestamp: %lu µs\n"
+                            "  System ready for motion tracking.\n",
+                    gpsAnchor->second.latitude, 
+                    gpsAnchor->second.longitude, 
+                    gpsAnchor->second.altitude,
+                    gpsAnchor->first);
+            printColored(stdout, COLOR_GREEN, buffer);
+            
+            fprintf(stderr, "   [fusion #%u] Trajectory initialized\n", fusionCallCount);
+            fflush(stderr);
         }
         
         dwTime_t anchorTimestamp = gpsAnchor->first;
         
+        fprintf(stderr, "   [fusion #%u] Checking timestamp (anchor=%lu, lastProcessed=%lu)\n",
+                fusionCallCount, anchorTimestamp, m_temporalBuffers.lastProcessedTimestamp);
+        fflush(stderr);
+        
         // Skip if we've already processed this timestamp
         if (anchorTimestamp <= m_temporalBuffers.lastProcessedTimestamp) {
+            fprintf(stderr, "   [fusion #%u] Already processed, returning false\n", fusionCallCount);
+            fflush(stderr);
             return false;
         }
+        
+        fprintf(stderr, "   [fusion #%u] Finding IMU match...\n", fusionCallCount);
+        fflush(stderr);
         
         // Find temporally aligned IMU data
         auto imuMatch = findClosestSensorData(m_temporalBuffers.imuBuffer, anchorTimestamp, TEMPORAL_WINDOW_US);
         if (imuMatch == m_temporalBuffers.imuBuffer.end()) {
-            return false; // No IMU data within temporal window
+            fprintf(stderr, "   [fusion #%u] No IMU match found, returning false\n", fusionCallCount);
+            fflush(stderr);
+            return false;
         }
+        
+        fprintf(stderr, "   [fusion #%u] IMU match found: timestamp=%lu\n", 
+                fusionCallCount, imuMatch->first);
+        fflush(stderr);
         
         // Extract synchronized sensor frames
         dwGPSFrame& gpsFrame = gpsAnchor->second;
         dwIMUFrame& imuFrame = imuMatch->second;
+
+        fprintf(stderr, "   [fusion #%u] Buffer data extracted:\n", fusionCallCount);
+        fprintf(stderr, "      GPS: [%.8f, %.8f, %.2fm] @ %lu\n",
+                gpsFrame.latitude, gpsFrame.longitude, gpsFrame.altitude, gpsFrame.timestamp_us);
+        fprintf(stderr, "      IMU: accel=[%.6f,%.6f,%.6f] gyro=[%.6f,%.6f,%.6f] @ %lu\n",
+                imuFrame.acceleration[0], imuFrame.acceleration[1], imuFrame.acceleration[2],
+                imuFrame.turnrate[0], imuFrame.turnrate[1], imuFrame.turnrate[2],
+                imuFrame.timestamp_us);
+        fflush(stderr);
         
         // Update current sensor states for rendering/logging
         m_currentGPSFrame = gpsFrame;
         m_currentIMUFrame = imuFrame;
         
-        // Feed synchronized data to egomotion (mimics original sample's immediate processing)
-        processSynchronizedSensorData(gpsFrame, imuFrame, anchorTimestamp);
+        fprintf(stderr, "   [fusion #%u] Processing synchronized sensor data...\n", fusionCallCount);
+        fflush(stderr);
+        
+        // Feed synchronized data to egomotion
+        processSynchronizedSensorData(m_currentGPSFrame, imuFrame, anchorTimestamp);
+        
+        fprintf(stderr, "   [fusion #%u] Sensor data processed\n", fusionCallCount);
+        fflush(stderr);
         
         // Handle CAN data synchronization
+        fprintf(stderr, "   [fusion #%u] Getting CAN synchronized state...\n", fusionCallCount);
+        fflush(stderr);
+        
         dwVehicleIOSafetyState safetyState;
         dwVehicleIONonSafetyState nonSafetyState;
         dwVehicleIOActuationFeedback actuationFeedback;
 
-        if (m_canParser->getTemporallySynchronizedState(&safetyState, &nonSafetyState, &actuationFeedback)) {
+        bool canStateValid = m_canParser->getTemporallySynchronizedState(
+            &safetyState, &nonSafetyState, &actuationFeedback);
         
-            char diagBuf[1024];
-            sprintf(diagBuf, 
-                "═══════════════════════════════════════════\n"
-                " VehicleIO State Before Egomotion:\n"
-                "─────────────────────────────────────────\n"
-                "SafetyState:\n"
-                "  steeringWheelAngle: %.3f rad (%.1f°)\n"
-                "  timestamp_us: %lu\n"
-                "  size: %u\n"
-                "─────────────────────────────────────────\n"
-                "NonSafetyState:\n"
-                "  speedESC: %.3f m/s (%.1f km/h)\n"
-                "  speedDirection: %d\n"
-                "  wheelSpeed[FL]: %.3f rad/s\n"
-                "  wheelSpeed[FR]: %.3f rad/s\n"
-                "  wheelSpeed[RL]: %.3f rad/s\n"
-                "  wheelSpeed[RR]: %.3f rad/s\n"
-                "  wheelTicksTimestamp[FL]: %lu\n"
-                "  wheelTicksTimestamp[FR]: %lu\n"
-                "  wheelTicksTimestamp[RL]: %lu\n"
-                "  wheelTicksTimestamp[RR]: %lu\n"
-                "  frontSteeringAngle: %.3f rad\n"
-                "  frontSteeringTimestamp: %lu\n"
-                "  timestamp_us: %lu\n"
-                "  size: %u\n"
-                "─────────────────────────────────────────\n"
-                "ActuationFeedback:\n"
-                "  wheelSpeed[RL]: %.3f rad/s\n"
-                "  wheelSpeed[RR]: %.3f rad/s\n"
-                "  timestamp_us: %lu\n"
-                "  size: %u\n"
-                "═══════════════════════════════════════════\n",
-                safetyState.steeringWheelAngle, safetyState.steeringWheelAngle * 180.0f / M_PI,
-                safetyState.timestamp_us,
-                safetyState.size,
-                nonSafetyState.speedESC, nonSafetyState.speedESC * 3.6f,
-                (int)nonSafetyState.speedDirectionESC,
-                nonSafetyState.wheelSpeed[0],
-                nonSafetyState.wheelSpeed[1],
-                nonSafetyState.wheelSpeed[2],
-                nonSafetyState.wheelSpeed[3],
-                nonSafetyState.wheelTicksTimestamp[0],
-                nonSafetyState.wheelTicksTimestamp[1],
-                nonSafetyState.wheelTicksTimestamp[2],
-                nonSafetyState.wheelTicksTimestamp[3],
-                nonSafetyState.frontSteeringAngle,
-                nonSafetyState.frontSteeringTimestamp,
-                nonSafetyState.timestamp_us,
-                nonSafetyState.size,
-                actuationFeedback.wheelSpeed[2],
-                actuationFeedback.wheelSpeed[3],
-                actuationFeedback.timestamp_us,
-                actuationFeedback.size);
-            printColored(stdout, COLOR_GREEN, diagBuf);
+        fprintf(stderr, "   [fusion #%u] CAN state valid: %s\n", 
+                fusionCallCount, canStateValid ? "YES" : "NO");
+        fflush(stderr);
+        
+        if (canStateValid) {
+            fprintf(stderr, "   [fusion #%u] CAN input:\n", fusionCallCount);
+            fprintf(stderr, "      speed=%.3f @ %lu, steering=%.3f @ %lu\n",
+                    nonSafetyState.speedESC, nonSafetyState.speedESCTimestamp,
+                    safetyState.steeringWheelAngle, safetyState.timestamp_us);
+            fflush(stderr);
             
-            // Validate before sending to egomotion
-            bool isValid = true;
-            if (nonSafetyState.speedESC < 0.0f || nonSafetyState.speedESC > 100.0f) {
-                printColored(stdout, COLOR_RED, " Invalid speedESC!\n");
-                isValid = false;
-            }
-            if (nonSafetyState.size != sizeof(dwVehicleIONonSafetyState)) {
-                printColored(stdout, COLOR_RED, " Invalid NonSafetyState size!\n");
-                isValid = false;
-            }
-            if (safetyState.size != sizeof(dwVehicleIOSafetyState)) {
-                printColored(stdout, COLOR_RED, " Invalid SafetyState size!\n");
-                isValid = false;
-            }
-            if (actuationFeedback.size != sizeof(dwVehicleIOActuationFeedback)) {
-                printColored(stdout, COLOR_RED, " Invalid ActuationFeedback size!\n");
-                isValid = false;
+            dwStatus status = dwEgomotion_addVehicleIOState(&safetyState,
+                                                            &nonSafetyState,
+                                                            &actuationFeedback,
+                                                            m_egomotion);
+            if (status != DW_SUCCESS) {
+                fprintf(stderr, "   [fusion #%u] Failed to add vehicle state: %d\n", 
+                        fusionCallCount, status);
+            } else {
+                fprintf(stderr, "   [fusion #%u] Successfully fed CAN to egomotion\n", 
+                        fusionCallCount);
             }
             
-            if (!isValid) {
-                printColored(stdout, COLOR_RED, " Skipping invalid VehicleIO state\n");
-                return false;
-            }
-            
-            if (nonSafetyState.speedESC >= 0.0f && nonSafetyState.speedESC < 100.0f) {
-                CHECK_DW_ERROR(dwEgomotion_addVehicleIOState(&safetyState, &nonSafetyState, &actuationFeedback, m_egomotion));
-                
-                static dwTime_t lastDebugLog = 0;
-                if (allowEvery(anchorTimestamp, lastDebugLog, 1000000)) {  // Every 1 second
-                    char buf[512];
-                    sprintf(buf, " Egomotion Input Debug:\n"
-                                "  Wheel Speeds: FL=%.2f, FR=%.2f, RL=%.2f, RR=%.2f rad/s\n"
-                                "  Wheel Times: FL=%lu, FR=%lu, RL=%lu, RR=%lu\n"
-                                "  Steering: %.3f rad (%.1f°)\n"
-                                "  Speed (ESC): %.2f m/s\n"
-                                "  Main Timestamp: %lu µs\n",
-                            nonSafetyState.wheelSpeed[0], nonSafetyState.wheelSpeed[1],
-                            nonSafetyState.wheelSpeed[2], nonSafetyState.wheelSpeed[3],
-                            nonSafetyState.wheelTicksTimestamp[0], nonSafetyState.wheelTicksTimestamp[1],
-                            nonSafetyState.wheelTicksTimestamp[2], nonSafetyState.wheelTicksTimestamp[3],
-                            safetyState.steeringWheelAngle, safetyState.steeringWheelAngle * 180.0f / M_PI,
-                            nonSafetyState.speedESC,
-                            nonSafetyState.timestamp_us);
-                    printColored(stdout, COLOR_DEFAULT, buf);
-                }
-            }
-
-            dwEgomotionResult estimate;
-            dwStatus estStatus = dwEgomotion_getEstimation(&estimate, m_egomotion);
-
-            char estBuf[512];
-            sprintf(estBuf,
-                " Egomotion Estimation Status: %s\n"
-                "  validFlags: 0x%08X\n"
-                "  timestamp: %lu\n"
-                "  linearVelocity: [%.3f, %.3f, %.3f]\n"
-                "  angularVelocity: [%.3f, %.3f, %.3f]\n",
-                dwGetStatusName(estStatus),
-                estimate.validFlags,
-                estimate.timestamp,
-                estimate.linearVelocity[0], estimate.linearVelocity[1], estimate.linearVelocity[2],
-                estimate.angularVelocity[0], estimate.angularVelocity[1], estimate.angularVelocity[2]);
-            printColored(stdout, COLOR_YELLOW, estBuf);
-
+            fprintf(stderr, "   [fusion #%u] CAN state processed\n", fusionCallCount);
+            fflush(stderr);
         }
+        
+        fprintf(stderr, "   [fusion #%u] Updating last processed timestamp...\n", fusionCallCount);
+        fflush(stderr);
         
         m_temporalBuffers.lastProcessedTimestamp = anchorTimestamp;
         m_elapsedTime = anchorTimestamp - m_firstTimestamp;
+        
+        fprintf(stderr, "   [fusion #%u] Returning TRUE\n", fusionCallCount);
+        fflush(stderr);
         
         return true;
     }
     
     /**
-     * Processes synchronized GPS and IMU data (equivalent to original immediate processing)
+     * Processes synchronized GPS and IMU data
      */
     void processSynchronizedSensorData(const dwGPSFrame& gpsFrame, const dwIMUFrame& imuFrame, dwTime_t timestamp) {
         // GPS processing (from original immediate processing)
         m_trajectoryLog.addWGS84("GPS", gpsFrame);
-        CHECK_DW_ERROR(dwGlobalEgomotion_addGPSMeasurement(&gpsFrame, m_globalEgomotion));
-        
-        // IMU processing (from original immediate processing)  
+            fprintf(stderr, "      [procSync] Feeding to APIs:\n");
+            fprintf(stderr, "         GPS input: [%.8f, %.8f] @ %lu\n",
+                    gpsFrame.latitude, gpsFrame.longitude, gpsFrame.timestamp_us);
+            fflush(stderr);
+            
+            dwStatus gpsStatus = dwGlobalEgomotion_addGPSMeasurement(&gpsFrame, m_globalEgomotion);
+            fprintf(stderr, "         GPS result: %d (%s)\n", gpsStatus, dwGetStatusName(gpsStatus));
+            fflush(stderr);
+
         if (m_egomotionParameters.motionModel != DW_EGOMOTION_ODOMETRY) {
+            fprintf(stderr, "         IMU input: accel_mag=%.6f gyro_mag=%.6f @ %lu\n",
+                    sqrtf(imuFrame.acceleration[0]*imuFrame.acceleration[0] + 
+                        imuFrame.acceleration[1]*imuFrame.acceleration[1] + 
+                        imuFrame.acceleration[2]*imuFrame.acceleration[2]),
+                    sqrtf(imuFrame.turnrate[0]*imuFrame.turnrate[0] + 
+                        imuFrame.turnrate[1]*imuFrame.turnrate[1] + 
+                        imuFrame.turnrate[2]*imuFrame.turnrate[2]),
+                    imuFrame.timestamp_us);
+            fflush(stderr);
+            
             dwEgomotion_addIMUMeasurement(&imuFrame, m_egomotion);
+            dwStatus imuStatus = dwEgomotion_addIMUMeasurement(&imuFrame, m_egomotion);
+                fprintf(stderr, "         IMU result: %d (%s)\n", imuStatus, dwGetStatusName(imuStatus));
+                fflush(stderr);
         }
         
-        // Rate-limited sensor logging (preserve original 5Hz logging rate)
         static dwTime_t lastGpsLog = 0, lastImuLog = 0;
         
         if (allowEvery(timestamp, lastGpsLog, 200000)) {
@@ -456,137 +477,215 @@ private:
         
         return bestMatch;
     }
-    
-    
-    void drainSensorEventsToBuffers() {
-        static uint32_t canCount = 0, imuCount = 0, gpsCount = 0;
-        static dwTime_t lastReport = 0;
-        
-        dwTime_t now = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        
-        if (now - lastReport > 1000000) {  // Every 1 second
-            char buf[256];
-            sprintf(buf, "📡 Sensor Events (last 1s): CAN=%u, IMU=%u, GPS=%u\n",
-                    canCount, imuCount, gpsCount);
-            printColored(stdout, COLOR_YELLOW, buf);
-            canCount = imuCount = gpsCount = 0;
-            lastReport = now;
-        }    
-        
-        
-        // Short drainage budget to prevent starvation (500μs vs original 2ms)
-            auto budgetEnd = std::chrono::steady_clock::now() + std::chrono::microseconds(5000);
-            int drained = 0;
-            
-            // Batch updates to reduce mutex contention
-            std::vector<std::pair<dwTime_t, dwGPSFrame>> gpsUpdates;
-            std::vector<std::pair<dwTime_t, dwIMUFrame>> imuUpdates;
-            std::vector<std::pair<dwTime_t, dwCANMessage>> canUpdates;
-            
-            while (!isPaused() && drained < 128) {
-                if (std::chrono::steady_clock::now() >= budgetEnd) {
-                    break;
-                }
-                
-                dwStatus status = dwSensorManager_acquireNextEvent(&acquiredEvent, 0, m_sensorManager);
-                
-                if (status == DW_TIME_OUT) {
-                    break;
-                }
-                
-                if (status != DW_SUCCESS) {
-                    if (status != DW_END_OF_STREAM) {
-                        logError("Sensor drainage error: %s\n", dwGetStatusName(status));
-                    } else if (should_AutoExit()) {
-                        stop();
-                        return;
-                    }
-                    break;
-                }
-                
-                dwTime_t timestamp = acquiredEvent->timestamp_us;
-                
-                if (m_firstTimestamp == 0) {
-                    m_firstTimestamp = timestamp;
-                    m_lastSampleTimestamp = timestamp;
-                }
-                
-                // Store in batch arrays with sensor validation
-                switch (acquiredEvent->type) {
-                    case DW_SENSOR_GPS:
-                        if (acquiredEvent->sensorIndex == m_gpsSensorIdx) {
-                            gpsUpdates.emplace_back(timestamp, acquiredEvent->gpsFrame);
-                        }
-                        gpsCount++;
-                        break;
-                    case DW_SENSOR_IMU:
-                        if (acquiredEvent->sensorIndex == m_imuSensorIdx) {
-                            imuUpdates.emplace_back(timestamp, acquiredEvent->imuFrame);
-                        }
-                        imuCount++;
-                        break;
-                    case DW_SENSOR_CAN:
-                        if (acquiredEvent->sensorIndex == m_vehicleSensorIdx) {
-                            canUpdates.emplace_back(timestamp, acquiredEvent->canFrame);
-                            // Process CAN immediately for parser
-                            m_canParser->processCANFrame(acquiredEvent->canFrame);
-                            
-                            static dwTime_t lastTimeoutCheck = 0;
-                            if (timestamp - lastTimeoutCheck > 50000) {
-                                m_canParser->checkMessageTimeouts(timestamp);
-                                lastTimeoutCheck = timestamp;
-                            }
-                        }
-                        canCount++;
-                        break;
-                    case DW_SENSOR_CAMERA:
-                        // Camera processing remains immediate
-                        processCameraImmediate();
-                        break;
-                    default:
-                        break;
-                }
-                
-                dwSensorManager_releaseAcquiredEvent(acquiredEvent, m_sensorManager);
-                acquiredEvent = nullptr;
-                ++drained;
-            }
-            
-            // Single batch update with mutex lock
-            if (!gpsUpdates.empty() || !imuUpdates.empty() || !canUpdates.empty()) {
-                std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
-                
-                for (auto& update : gpsUpdates) {
-                    if (update.first > m_temporalBuffers.lastGPSTimestamp) {
-                        m_temporalBuffers.gpsBuffer[update.first] = update.second;
-                        m_temporalBuffers.lastGPSTimestamp = update.first;
-                    }
-                }
-                
-                for (auto& update : imuUpdates) {
-                    if (update.first > m_temporalBuffers.lastIMUTimestamp) {
-                        m_temporalBuffers.imuBuffer[update.first] = update.second;
-                        m_temporalBuffers.lastIMUTimestamp = update.first;
-                    }
-                }
-                
-                for (auto& update : canUpdates) {
-                    m_temporalBuffers.canBuffer[update.first] = update.second;
-                    m_temporalBuffers.lastCANTimestamp = update.first;
-                }
-                
-                // Cleanup old data once per batch
-                if (!gpsUpdates.empty()) {
-                    m_temporalBuffers.cleanupOldData(gpsUpdates.back().first);
-                } else if (!imuUpdates.empty()) {
-                    m_temporalBuffers.cleanupOldData(imuUpdates.back().first);
-                } else if (!canUpdates.empty()) {
-                    m_temporalBuffers.cleanupOldData(canUpdates.back().first);
-                }
-            }
-    }
 
+    bool drainSensorEventsToBuffers() {
+            static uint32_t drainageCallCount = 0;
+            static dwTime_t lastDrainageReport = 0;
+            static dwTime_t drainageStart = 0;
+            static bool catchUpMode = false;
+            static uint32_t normalDrainCounter = 0;
+            
+            dwTime_t now = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            
+            if (drainageStart == 0) {
+                drainageStart = now;
+            }
+            
+            ++drainageCallCount;
+
+            if (now - lastDrainageReport > 1000000) {
+                float32_t callRate = (drainageCallCount * 1000000.0f) / (now - drainageStart);
+                char buf[256];
+                sprintf(buf, " Drainage loop: %u calls, %.1f Hz\n", drainageCallCount, callRate);
+                printColored(stdout, COLOR_DEFAULT, buf);
+                lastDrainageReport = now;
+            }
+            
+            static uint32_t canCount = 0, imuCount = 0, gpsCount = 0, cameraCount = 0;
+            static dwTime_t lastReport = 0;
+            
+            if (now - lastReport > 1000000) {
+                char buf[512];
+                sprintf(buf, " Sensor events (last 1s): CAN=%u, IMU=%u, GPS=%u, Camera=%u\n",
+                        canCount, imuCount, gpsCount, cameraCount);
+                printColored(stdout, COLOR_YELLOW, buf);
+                
+                if (canCount == 0 && imuCount == 0 && gpsCount == 0) {
+                    printColored(stdout, COLOR_RED, "WARNING: No sensor events drained!\n");
+                }
+                
+                canCount = imuCount = gpsCount = cameraCount = 0;
+                lastReport = now;
+            }
+            
+            int totalDrained = 0;
+            int passCount = 0;
+            bool hitLimit = false;
+            
+            auto overallStart = std::chrono::steady_clock::now();
+            
+            // CRITICAL FIX: Shorter budgets
+            // Catch-up: 8ms (allows 5 passes of 1.6ms each)
+            // Normal: 5ms (leaves 5ms for fusion at 100Hz)
+            int budgetUs = catchUpMode ? 8000 : 5000;
+            auto totalBudgetEnd = overallStart + std::chrono::microseconds(budgetUs);
+            
+            while (passCount < 5 && !isPaused()) {
+                if (std::chrono::steady_clock::now() >= totalBudgetEnd) {
+                    break;  // Total budget exhausted
+                }
+                
+                int drained = 0;
+                std::vector<std::pair<dwTime_t, dwGPSFrame>> gpsUpdates;
+                std::vector<std::pair<dwTime_t, dwIMUFrame>> imuUpdates;
+                std::vector<std::pair<dwTime_t, dwCANMessage>> canUpdates;
+                
+                while (!isPaused() && drained < 128) {
+                    if (std::chrono::steady_clock::now() >= totalBudgetEnd) {
+                        break;  // Budget check
+                    }
+                    
+                    dwStatus status = dwSensorManager_acquireNextEvent(&acquiredEvent, 0, m_sensorManager);
+                    
+                    if (status == DW_TIME_OUT) {
+                        break;
+                    }
+                    
+                    if (status != DW_SUCCESS) {
+                        if (status != DW_END_OF_STREAM) {
+                            logError("Sensor drainage error: %s\n", dwGetStatusName(status));
+                        } else if (should_AutoExit()) {
+                            stop();
+                            return false;
+                        }
+                        break;
+                    }
+                    
+                    dwTime_t timestamp = acquiredEvent->timestamp_us;
+                    
+                    if (m_firstTimestamp == 0) {
+                        m_firstTimestamp = timestamp;
+                        m_lastSampleTimestamp = timestamp;
+                    }
+                    
+                    switch (acquiredEvent->type) {
+                        case DW_SENSOR_GPS:
+                            if (acquiredEvent->sensorIndex == m_gpsSensorIdx) {
+                                gpsUpdates.emplace_back(timestamp, acquiredEvent->gpsFrame);
+                            }
+                            gpsCount++;
+                            break;
+                            
+                        case DW_SENSOR_IMU:
+                            if (acquiredEvent->sensorIndex == m_imuSensorIdx) {
+                                imuUpdates.emplace_back(timestamp, acquiredEvent->imuFrame);
+                            }
+                            imuCount++;
+                            break;
+                            
+                        case DW_SENSOR_CAN:
+                            if (acquiredEvent->sensorIndex == m_vehicleSensorIdx) {
+                                canUpdates.emplace_back(timestamp, acquiredEvent->canFrame);
+                                m_canParser->processCANFrame(acquiredEvent->canFrame);
+                                
+                                static dwTime_t lastTimeoutCheck = 0;
+                                if (timestamp - lastTimeoutCheck > 50000) {
+                                    m_canParser->checkMessageTimeouts(timestamp);
+                                    lastTimeoutCheck = timestamp;
+                                }
+                            }
+                            canCount++;
+                            break;
+                            
+                        case DW_SENSOR_CAMERA:
+                            cameraCount++;
+                            break;
+                            
+                        default:
+                            break;
+                    }
+                    
+                    dwSensorManager_releaseAcquiredEvent(acquiredEvent, m_sensorManager);
+                    acquiredEvent = nullptr;
+                    ++drained;
+                }
+                
+                // Apply updates
+                if (!gpsUpdates.empty() || !imuUpdates.empty() || !canUpdates.empty()) {
+                    std::lock_guard<std::mutex> lock(m_temporalBuffers.bufferMutex);
+                    
+                    for (auto& update : gpsUpdates) {
+                        if (update.first > m_temporalBuffers.lastGPSTimestamp) {
+                            m_temporalBuffers.gpsBuffer[update.first] = update.second;
+                            m_temporalBuffers.lastGPSTimestamp = update.first;
+                        }
+                    }
+                    
+                    for (auto& update : imuUpdates) {
+                        if (update.first > m_temporalBuffers.lastIMUTimestamp) {
+                            m_temporalBuffers.imuBuffer[update.first] = update.second;
+                            m_temporalBuffers.lastIMUTimestamp = update.first;
+                        }
+                    }
+                    
+                    for (auto& update : canUpdates) {
+                        m_temporalBuffers.canBuffer[update.first] = update.second;
+                        m_temporalBuffers.lastCANTimestamp = update.first;
+                    }
+                    
+                    if (!gpsUpdates.empty()) {
+                        m_temporalBuffers.cleanupOldData(gpsUpdates.back().first);
+                    } else if (!imuUpdates.empty()) {
+                        m_temporalBuffers.cleanupOldData(imuUpdates.back().first);
+                    } else if (!canUpdates.empty()) {
+                        m_temporalBuffers.cleanupOldData(canUpdates.back().first);
+                    }
+                }
+                
+                totalDrained += drained;
+                passCount++;
+                
+                if (drained >= 128) {
+                    hitLimit = true;
+                } else {
+                    break;  // No more data
+                }
+            }
+            
+            // Update catch-up state
+            if (hitLimit) {
+                if (!catchUpMode) {
+                    catchUpMode = true;
+                    fprintf(stderr, " CATCH-UP MODE ENTER\n");
+                    fflush(stderr);
+                }
+                normalDrainCounter = 0;
+            } else {
+                normalDrainCounter++;
+                if (catchUpMode && normalDrainCounter >= 3) {
+                    catchUpMode = false;
+                    normalDrainCounter = 0;
+                    fprintf(stderr, " CATCH-UP MODE EXIT\n");
+                    fflush(stderr);
+                }
+            }
+            
+            // Logging every 10 cycles
+            static uint32_t cycleCounter = 0;
+            ++cycleCounter;
+            auto overallTime = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - overallStart).count();
+            
+            if (cycleCounter % 10 == 0 || catchUpMode) {
+                fprintf(stderr, " Cycle #%u: %d events in %.1fms over %d passes%s\n",
+                        cycleCounter, totalDrained, overallTime / 1000.0f, passCount,
+                        catchUpMode ? " [CATCH-UP]" : "");
+                fflush(stderr);
+            }
+            
+            return catchUpMode;
+        }
     void bufferGPSData(const dwGPSFrame& gpsFrame) {
         dwTime_t timestamp = gpsFrame.timestamp_us;
         
@@ -1495,9 +1594,71 @@ public:
 
         dwRenderEngine_setTile(m_tileGrid, m_renderEngine);
     }
-
     void onRender() override
     {
+        // ========================================
+        // DIAGNOSTIC: Render thread heartbeat - confirms render loop is alive
+        // ========================================
+        static uint32_t renderCount = 0;
+        static dwTime_t lastRenderLog = 0;
+        static dwTime_t renderStart = 0;
+        
+        dwTime_t now = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        if (renderStart == 0) {
+            renderStart = now;
+        }
+        
+        ++renderCount;
+        
+        if (now - lastRenderLog > 2000000) {  // Every 2 seconds
+            float32_t actualFps = (renderCount * 1000000.0f) / (now - renderStart);
+            char buf[256];
+            sprintf(buf, "🎨 Render thread: %u frames, %.1f FPS\n", renderCount, actualFps);
+            printColored(stdout, COLOR_GREEN, buf);
+            lastRenderLog = now;
+        }
+        
+        // ========================================
+        // NEW: Process pending camera frames asynchronously
+        // This runs in the render thread where GL context is active
+        // ========================================
+        {
+            std::lock_guard<std::mutex> lock(m_cameraQueueMutex);
+            
+            // Process one camera frame per render cycle (if available and ready)
+            if (!m_pendingCameraFrames.empty() && m_lastGLFrame == DW_NULL_HANDLE) {
+                auto& pending = m_pendingCameraFrames.front();
+                
+                // GL streaming happens here (safe in render context, no time pressure)
+                m_lastGLFrame = m_streamerInput2GL->post(pending.cudaImage);
+                
+                // Destroy the CUDA image after streaming
+                dwImage_destroy(pending.cudaImage);
+                
+                m_pendingCameraFrames.pop_front();
+                m_shallRender = true;
+                
+                // DIAGNOSTIC: Track camera frame processing
+                static uint32_t processedFrames = 0;
+                static dwTime_t lastCameraLog = 0;
+                dwTime_t now = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                
+                if (++processedFrames % 30 == 0 || now - lastCameraLog > 5000000) {  // Every 30 frames or 5s
+                    char buf[256];
+                    sprintf(buf, "📷 Camera frames: %u processed, %lu queued\n", 
+                            processedFrames, m_pendingCameraFrames.size());
+                    printColored(stdout, COLOR_YELLOW, buf);
+                    lastCameraLog = now;
+                }
+            }
+        }
+        
+        // ========================================
+        // EXISTING: Render only if there's new data
+        // ========================================
         if (!isPaused() && !m_shallRender)
             return;
 
@@ -1510,129 +1671,301 @@ public:
 
         render3DGrid();
 
+        // Render camera frame if available
         if (m_lastGLFrame != DW_NULL_HANDLE)
+        {
+            dwImageGL* glFrame = nullptr;
+            dwImage_getGL(&glFrame, m_lastGLFrame);
+
+            if (glFrame)
             {
-                dwImageGL* glFrame = nullptr;
-                dwImage_getGL(&glFrame, m_lastGLFrame);   // borrow pointer for draw
-
-                if (glFrame)
-                {
-                    dwRenderEngine_setTile(m_tileVideo, m_renderEngine);
-                    dwVector2f range{float(glFrame->prop.width), float(glFrame->prop.height)};
-                    dwRenderEngine_setCoordinateRange2D(range, m_renderEngine);
-                    dwRenderEngine_renderImage2D(glFrame, {0.0f, 0.0f, range.x, range.y}, m_renderEngine);
-                }
-
-                // Return GL frame to the streamer so the pool doesn’t fill up
-                m_streamerInput2GL->release();
-                m_lastGLFrame = DW_NULL_HANDLE;
+                dwRenderEngine_setTile(m_tileVideo, m_renderEngine);
+                dwVector2f range{float(glFrame->prop.width), float(glFrame->prop.height)};
+                dwRenderEngine_setCoordinateRange2D(range, m_renderEngine);
+                dwRenderEngine_renderImage2D(glFrame, {0.0f, 0.0f, range.x, range.y}, m_renderEngine);
             }
+
+            // Return GL frame to the streamer so the pool doesn't fill up
+            m_streamerInput2GL->release();
+            m_lastGLFrame = DW_NULL_HANDLE;
+        }
 
         renderText();
         renderPlots();
 
         renderutils::renderFPS(m_renderEngine, getCurrentFPS());
     }
-
+    
+    
     /// Real-time CAN message processing with synchronized state commits
     /// Temporal sensor fusion with synchronized egomotion processing
     void onProcess() override
-    {
-        dwTime_t currentTime = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+{
+    auto processStart = std::chrono::steady_clock::now();
+    static uint32_t processCount = 0;
+    static dwTime_t lastHeartbeat = 0;
+    static dwTime_t heartbeatStart = 0;
+    
+    dwTime_t now = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    fprintf(stderr, " [%lu] ENTER onProcess() #%u\n", now, ++processCount);
+    fflush(stderr);
+    
+    if (heartbeatStart == 0) {
+        heartbeatStart = now;
+    }
+    
+    if (now - lastHeartbeat > 1000000) {
+        float32_t actualHz = (processCount * 1000000.0f) / (now - heartbeatStart);
+        fprintf(stderr, " Main loop: %u cycles, %.1f Hz actual (target 100 Hz)\n", 
+                processCount, actualHz);
+        fflush(stderr);
+        lastHeartbeat = now;
+    }
+    
+    dwTime_t currentTime = now;
+    
+    // Phase 1: Drain sensor events
+    fprintf(stderr, " [%u] Starting drainage...\n", processCount);
+    fflush(stderr);
+    
+    auto drainStart = std::chrono::steady_clock::now();
+    bool inCatchUp = drainSensorEventsToBuffers();
+    auto drainTime = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - drainStart).count();
+    
+    fprintf(stderr, " [%u] Drainage complete: %.1fms, catchUp=%d\n", 
+            processCount, drainTime / 1000.0f, inCatchUp);
+    fflush(stderr);
+    
+    // Phase 2: Skip fusion during catch-up
+    if (inCatchUp) {
+        fprintf(stderr, " [%u] Skipping fusion (catch-up mode active)\n", processCount);
+        fflush(stderr);
         
-        // Phase 1: Quick drainage of sensor events to temporal buffers  
-        // (Mimics original sample's event loop but stores for temporal processing)
-        drainSensorEventsToBuffers();
+        auto totalTime = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - processStart).count();
+        fprintf(stderr, " [%u] EXIT onProcess(): %.1fms total\n", 
+                processCount, totalTime / 1000.0f);
+        fflush(stderr);
+        return;
+    }
+    
+    // Phase 3: Normal fusion
+    if (currentTime - m_lastFusionTimestamp >= FUSION_RATE_US) {
+        fprintf(stderr, " [%u] Attempting fusion (lastFusion=%lu, current=%lu, diff=%lu)\n",
+                processCount, m_lastFusionTimestamp, currentTime, 
+                currentTime - m_lastFusionTimestamp);
+        fflush(stderr);
         
-        // Phase 2: Attempt temporal fusion at GPS rate (prevents buffer overflow)
-        // (Mimics original sample's synchronized processing but with temporal coordination)
-        if (currentTime - m_lastFusionTimestamp >= FUSION_RATE_US) {
-            if (attemptTemporalFusion(currentTime)) {
-                m_lastFusionTimestamp = currentTime;
-                
-                // Phase 3: Continue with original sample's pose estimation logic
-                performPoseEstimationAndTrajectory();
+        auto fusionStart = std::chrono::steady_clock::now();
+        bool fusionSuccess = attemptTemporalFusion(currentTime);
+        auto fusionTime = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - fusionStart).count();
+        
+        fprintf(stderr, " [%u] Fusion %s: %.1fms\n", 
+                processCount, fusionSuccess ? "SUCCESS" : "FAILED", fusionTime / 1000.0f);
+        fflush(stderr);
+        
+        if (fusionSuccess) {
+            m_lastFusionTimestamp = currentTime;
+            
+            fprintf(stderr, " [%u] Starting pose estimation...\n", processCount);
+            fflush(stderr);
+            
+            auto poseStart = std::chrono::steady_clock::now();
+            performPoseEstimationAndTrajectory();
+            auto poseTime = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - poseStart).count();
+            
+            fprintf(stderr, " [%u] Pose estimation complete: %.1fms\n", 
+                    processCount, poseTime / 1000.0f);
+            fflush(stderr);
+            
+            if (poseTime > 5000) {
+                fprintf(stderr, "[%u] WARNING: Pose estimation took %.1fms (>5ms budget!)\n",
+                        processCount, poseTime / 1000.0f);
+                fflush(stderr);
             }
         }
+    } else {
+        fprintf(stderr, " [%u] Skipping fusion (too soon: %lu < %lu threshold)\n",
+                processCount, currentTime - m_lastFusionTimestamp, FUSION_RATE_US);
+        fflush(stderr);
     }
+    
+    auto totalTime = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - processStart).count();
+    
+    fprintf(stderr, " [%u] EXIT onProcess(): drain=%.1fms, total=%.1fms\n", 
+            processCount, drainTime / 1000.0f, totalTime / 1000.0f);
+    fflush(stderr);
+    
+    if (totalTime > 10000) {
+        fprintf(stderr, "[%u] WARNING: onProcess exceeded 10ms budget!\n", processCount);
+        fflush(stderr);
+    }
+}
 
-private:
+    private:
     /**
      * Pose estimation and trajectory building (extracted from sample_egomotion onProcess)
      */
     void performPoseEstimationAndTrajectory() {
-        dwEgomotionResult estimate;
-        dwEgomotionUncertainty uncertainty;
-        
-        if (dwEgomotion_getEstimation(&estimate, m_egomotion) == DW_SUCCESS &&
-            dwEgomotion_getUncertainty(&uncertainty, m_egomotion) == DW_SUCCESS)
-        {
-            dwGlobalEgomotion_addRelativeMotion(&estimate, &uncertainty, m_globalEgomotion);
-
-            if (estimate.timestamp >= m_lastSampleTimestamp + POSE_SAMPLE_PERIOD)
-            {
-                dwTransformation3f rigLast2rigNow;
-                dwStatus st = dwEgomotion_computeRelativeTransformation(&rigLast2rigNow, nullptr,
-                                                                        m_lastSampleTimestamp, estimate.timestamp, m_egomotion);
-                if (st == DW_SUCCESS)
-                {
-                    Pose pose{};
-                    quaternionToEulerAngles(estimate.rotation, pose.rpy[0], pose.rpy[1], pose.rpy[2]);
-
-                    dwTransformation3f rigLast2world = DW_IDENTITY_TRANSFORMATION3F;
-                    if (!m_poseHistory.empty())
-                        rigLast2world = m_poseHistory.back().rig2world;
-                    else if ((estimate.validFlags & DW_EGOMOTION_ROTATION) != 0)
-                    {
-                        dwMatrix3f rot{};
-                        getRotationMatrix(&rot, RAD2DEG(pose.rpy[0]), RAD2DEG(pose.rpy[1]), 0);
-                        rotationToTransformMatrix(rigLast2world.array, rot.array);
-                    }
-
-                    dwTransformation3f rigNow2World;
-                    dwEgomotion_applyRelativeTransformation(&rigNow2World, &rigLast2rigNow, &rigLast2world);
-
-                    pose.rig2world = rigNow2World;
-                    pose.timestamp = estimate.timestamp;
-
-                    if (m_poseHistory.size() > MAX_BUFFER_POINTS)
-                    {
-                        decltype(m_poseHistory) tmp;
-                        tmp.assign(++m_poseHistory.begin(), m_poseHistory.end());
-                        std::swap(tmp, m_poseHistory);
-                    }
-
-                    if (m_outputFile)
-                        fprintf(m_outputFile, "%lu,%.2f,%.2f,%.2f\n", estimate.timestamp,
-                                rigNow2World.array[0 + 3 * 4], rigNow2World.array[1 + 3 * 4], rigNow2World.array[2 + 3 * 4]);
-
-                    dwGlobalEgomotionResult absoluteEstimate{};
-                    if (dwGlobalEgomotion_getEstimate(&absoluteEstimate, nullptr, m_globalEgomotion) == DW_SUCCESS &&
-                        absoluteEstimate.timestamp == estimate.timestamp && absoluteEstimate.validOrientation)
-                    {
-                        m_orientationENU = absoluteEstimate.orientation;
-                        m_hasOrientationENU = true;
-
-                        if (m_trajectoryLog.size("Egomotion") == 0)
-                            m_trajectoryLog.addWGS84("Egomotion", m_currentGPSFrame);
-
-                        m_trajectoryLog.addWGS84("Egomotion", absoluteEstimate.position);
-                    }
-                    else
-                    {
-                        m_hasOrientationENU = false;
-                    }
-
-                    dwEgomotion_getUncertainty(&pose.uncertainty, m_egomotion);
-                    m_poseHistory.push_back(pose);
-                    m_shallRender = true;
-                }
-                m_lastSampleTimestamp = estimate.timestamp;
-            }
-        }
+    static uint32_t poseCount = 0;
+    ++poseCount;
+    
+    fprintf(stderr, "   [pose #%u] Getting estimation...\n", poseCount);
+    fflush(stderr);
+    
+    auto t1 = std::chrono::steady_clock::now();
+    dwEgomotionResult estimate;
+    dwEgomotionUncertainty uncertainty;
+    
+    dwStatus estStatus = dwEgomotion_getEstimation(&estimate, m_egomotion);
+    auto dt1 = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - t1).count();
+    fprintf(stderr, "   [pose #%u] dwEgomotion_getEstimation: %.1fms, status=%d\n", 
+            poseCount, dt1 / 1000.0f, estStatus);
+    fflush(stderr);
+    
+    if (estStatus != DW_SUCCESS) {
+        fprintf(stderr, "   [pose #%u] Estimation failed, exiting\n", poseCount);
+        fflush(stderr);
+        return;
     }
+    
+    auto t2 = std::chrono::steady_clock::now();
+    dwStatus uncStatus = dwEgomotion_getUncertainty(&uncertainty, m_egomotion);
+    auto dt2 = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - t2).count();
+    fprintf(stderr, "   [pose #%u] dwEgomotion_getUncertainty: %.1fms, status=%d\n", 
+            poseCount, dt2 / 1000.0f, uncStatus);
+    fflush(stderr);
+    
+    if (uncStatus != DW_SUCCESS) {
+        fprintf(stderr, "   [pose #%u] Uncertainty failed, exiting\n", poseCount);
+        fflush(stderr);
+        return;
+    }
+    
+    fprintf(stderr, "   [pose #%u] Adding relative motion to global egomotion...\n", poseCount);
+    fflush(stderr);
+    
+    auto t3 = std::chrono::steady_clock::now();
+    dwGlobalEgomotion_addRelativeMotion(&estimate, &uncertainty, m_globalEgomotion);
+    auto dt3 = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - t3).count();
+    fprintf(stderr, "   [pose #%u] dwGlobalEgomotion_addRelativeMotion: %.1fms\n", 
+            poseCount, dt3 / 1000.0f);
+    fflush(stderr);
+    
+    if (estimate.timestamp >= m_lastSampleTimestamp + POSE_SAMPLE_PERIOD)
+    {
+        fprintf(stderr, "   [pose #%u] Computing relative transformation...\n", poseCount);
+        fflush(stderr);
+        
+        auto t4 = std::chrono::steady_clock::now();
+        dwTransformation3f rigLast2rigNow;
+        dwStatus transStatus = dwEgomotion_computeRelativeTransformation(
+            &rigLast2rigNow, nullptr, m_lastSampleTimestamp, estimate.timestamp, m_egomotion);
+        auto dt4 = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - t4).count();
+        fprintf(stderr, "   [pose #%u] dwEgomotion_computeRelativeTransformation: %.1fms, status=%d\n", 
+                poseCount, dt4 / 1000.0f, transStatus);
+        fflush(stderr);
+        
+        if (transStatus == DW_SUCCESS)
+        {
+            fprintf(stderr, "   [pose #%u] Building pose history entry...\n", poseCount);
+            fflush(stderr);
+            
+            Pose pose{};
+            quaternionToEulerAngles(estimate.rotation, pose.rpy[0], pose.rpy[1], pose.rpy[2]);
 
+            dwTransformation3f rigLast2world = DW_IDENTITY_TRANSFORMATION3F;
+            if (!m_poseHistory.empty())
+                rigLast2world = m_poseHistory.back().rig2world;
+            else if ((estimate.validFlags & DW_EGOMOTION_ROTATION) != 0)
+            {
+                dwMatrix3f rot{};
+                getRotationMatrix(&rot, RAD2DEG(pose.rpy[0]), RAD2DEG(pose.rpy[1]), 0);
+                rotationToTransformMatrix(rigLast2world.array, rot.array);
+            }
+
+            dwTransformation3f rigNow2World;
+            dwEgomotion_applyRelativeTransformation(&rigNow2World, &rigLast2rigNow, &rigLast2world);
+
+            pose.rig2world = rigNow2World;
+            pose.timestamp = estimate.timestamp;
+
+            if (m_poseHistory.size() > MAX_BUFFER_POINTS)
+            {
+                fprintf(stderr, "   [pose #%u] Trimming pose history (size=%lu)\n", 
+                        poseCount, m_poseHistory.size());
+                fflush(stderr);
+                
+                decltype(m_poseHistory) tmp;
+                tmp.assign(++m_poseHistory.begin(), m_poseHistory.end());
+                std::swap(tmp, m_poseHistory);
+            }
+
+            if (m_outputFile)
+                fprintf(m_outputFile, "%lu,%.2f,%.2f,%.2f\n", estimate.timestamp,
+                        rigNow2World.array[0 + 3 * 4], rigNow2World.array[1 + 3 * 4], rigNow2World.array[2 + 3 * 4]);
+
+            fprintf(stderr, "   [pose #%u] Getting global estimate...\n", poseCount);
+            fflush(stderr);
+            
+            auto t5 = std::chrono::steady_clock::now();
+            dwGlobalEgomotionResult absoluteEstimate{};
+            dwStatus globalStatus = dwGlobalEgomotion_getEstimate(&absoluteEstimate, nullptr, m_globalEgomotion);
+            auto dt5 = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t5).count();
+            fprintf(stderr, "   [pose #%u] dwGlobalEgomotion_getEstimate: %.1fms, status=%d\n", 
+                    poseCount, dt5 / 1000.0f, globalStatus);
+            fflush(stderr);
+            
+            if (globalStatus == DW_SUCCESS &&
+                absoluteEstimate.timestamp == estimate.timestamp && absoluteEstimate.validOrientation)
+            {
+                m_orientationENU = absoluteEstimate.orientation;
+                m_hasOrientationENU = true;
+
+                if (m_trajectoryLog.size("Egomotion") == 0)
+                    m_trajectoryLog.addWGS84("Egomotion", m_currentGPSFrame);
+
+                m_trajectoryLog.addWGS84("Egomotion", absoluteEstimate.position);
+            }
+            else
+            {
+                m_hasOrientationENU = false;
+            }
+
+            dwEgomotion_getUncertainty(&pose.uncertainty, m_egomotion);
+            
+            fprintf(stderr, "   [pose #%u] Appending to pose history (new size=%lu)\n", 
+                    poseCount, m_poseHistory.size() + 1);
+            fflush(stderr);
+            
+            m_poseHistory.push_back(pose);
+            m_shallRender = true;
+        } else {
+            fprintf(stderr, "   [pose #%u] Relative transformation failed\n", poseCount);
+            fflush(stderr);
+        }
+        
+        m_lastSampleTimestamp = estimate.timestamp;
+    } else {
+        fprintf(stderr, "   [pose #%u] Skipping pose (timestamp %lu < threshold %lu + %ld)\n",
+                poseCount, estimate.timestamp, m_lastSampleTimestamp, POSE_SAMPLE_PERIOD);
+        fflush(stderr);
+    }
+    
+    fprintf(stderr, "   [pose #%u] Complete\n", poseCount);
+    fflush(stderr);
+}
     void onKeyDown(int key, int scancode, int mods) override
     {
         (void)scancode;
@@ -1678,9 +2011,17 @@ int main(int argc, const char* argv[])
 
     app.initializeWindow("Real-time Egomotion Sample", 1920, 1080, args.enabled("offscreen"));
 
+    // ========================================
+    // MODIFIED: Reduced process rate to match sensor bandwidth
+    // Previous: 240 Hz (4.17ms period) - caused timing conflicts
+    // Current:  100 Hz (10ms period) - matches IMU rate, safe drainage budget
+    // ========================================
     if (!args.enabled("offscreen"))
-        app.setProcessRate(240);
+        app.setProcessRate(100);  // Changed from 240
     
-    log("Starting real-time egomotion processing...\n");
+    log("Starting real-time egomotion processing at 100 Hz...\n");
+    log("Sensor drainage budget: 5ms per cycle\n");
+    log("Expected sensor rates: CAN=50Hz, IMU=100Hz, GPS=10Hz, Camera=30Hz\n");
+    
     return app.run();
-}
+                        }
