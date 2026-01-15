@@ -134,6 +134,12 @@ bool SygnalPomoParser::processCANFrame(const dwCANMessage& frame)
     dwTime_t expected = 0;
     m_initializationTimestamp.compare_exchange_weak(expected, frame.timestamp_us);
 
+    if (frame.id == 0x4F1) {
+        fprintf(stderr, "         [CAN] CLU11 RECEIVED: id=0x4F1, timestamp=%lu\n",
+                frame.timestamp_us);
+        fflush(stderr);
+    }
+
     bool messageProcessed = false;
 
     // Route message to appropriate processor
@@ -611,7 +617,7 @@ bool SygnalPomoParser::validateConfiguration(const VehicleCANConfiguration& conf
         return false;
     }
     
-    if (config.temporalWindow_us <= 0 || config.temporalWindow_us > 50000 ) { // Max 1 second
+    if (config.temporalWindow_us <= 0 || config.temporalWindow_us > 1000000 ) { // Max 1 second
         return false;
     }
     
@@ -649,7 +655,7 @@ bool SygnalPomoParser::extractParametersFromRig(dwRigHandle_t rigConfig, const c
     // Real-time processing defaults
     m_configuration.velocityLatencyCompensation_us = 20000;  // 20ms
     m_configuration.velocityFactor = 1.0f;
-    m_configuration.temporalWindow_us = 8000;               // 8ms
+    m_configuration.temporalWindow_us = 500000;               // 8ms
     m_configuration.stateCommitInterval_us = 10000;          // 10ms
     
     log("SygnalPomoParser: Hyundai/Kia real-time configuration extracted\n");
