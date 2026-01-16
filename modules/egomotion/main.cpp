@@ -92,7 +92,7 @@ private:
     // Renderer related
     // ------------------------------------------------
     dwRendererHandle_t m_renderer = DW_NULL_HANDLE;
-    bool m_shallRender            = false;
+    bool m_shallRender            = true;
     uint32_t m_tileGrid           = 0;
     uint32_t m_tileVideo          = 1;
     uint32_t m_tileRollPlot       = 2;
@@ -316,7 +316,7 @@ private:
         fflush(stderr);
         
         // Feed synchronized data to egomotion
-        processSynchronizedSensorData(m_currentGPSFrame, imuFrame, anchorTimestamp);
+        processSynchronizedSensorData(m_currentGPSFrame, m_currentIMUFrame, anchorTimestamp);
         
         fprintf(stderr, "   [fusion #%u] Sensor data processed\n", fusionCallCount);
         fflush(stderr);
@@ -331,10 +331,6 @@ private:
 
         bool canStateValid = m_canParser->getTemporallySynchronizedState(
             &safetyState, &nonSafetyState, &actuationFeedback);
-        
-        fprintf(stderr, "   [fusion #%u] CAN state valid: %s\n", 
-                fusionCallCount, canStateValid ? "YES" : "NO");
-        fflush(stderr);
         
         if (canStateValid) {
             fprintf(stderr, "   [fusion #%u] CAN input:\n", fusionCallCount);
@@ -377,29 +373,14 @@ private:
     void processSynchronizedSensorData(const dwGPSFrame& gpsFrame, const dwIMUFrame& imuFrame, dwTime_t timestamp) {
         // GPS processing (from original immediate processing)
         m_trajectoryLog.addWGS84("GPS", gpsFrame);
-            fprintf(stderr, "      [procSync] Feeding to APIs:\n");
-            fprintf(stderr, "         GPS input: [%.8f, %.8f] @ %lu\n",
-                    gpsFrame.latitude, gpsFrame.longitude, gpsFrame.timestamp_us);
-            fflush(stderr);
-            
             dwStatus gpsStatus = dwGlobalEgomotion_addGPSMeasurement(&gpsFrame, m_globalEgomotion);
-            fprintf(stderr, "         GPS result: %d (%s)\n", gpsStatus, dwGetStatusName(gpsStatus));
+            fprintf(stderr, "         GPS acceptance: %d (%s)\n", gpsStatus, dwGetStatusName(gpsStatus));
             fflush(stderr);
 
         if (m_egomotionParameters.motionModel != DW_EGOMOTION_ODOMETRY) {
-            fprintf(stderr, "         IMU input: accel_mag=%.6f gyro_mag=%.6f @ %lu\n",
-                    sqrtf(imuFrame.acceleration[0]*imuFrame.acceleration[0] + 
-                        imuFrame.acceleration[1]*imuFrame.acceleration[1] + 
-                        imuFrame.acceleration[2]*imuFrame.acceleration[2]),
-                    sqrtf(imuFrame.turnrate[0]*imuFrame.turnrate[0] + 
-                        imuFrame.turnrate[1]*imuFrame.turnrate[1] + 
-                        imuFrame.turnrate[2]*imuFrame.turnrate[2]),
-                    imuFrame.timestamp_us);
-            fflush(stderr);
-            
             dwEgomotion_addIMUMeasurement(&imuFrame, m_egomotion);
             dwStatus imuStatus = dwEgomotion_addIMUMeasurement(&imuFrame, m_egomotion);
-                fprintf(stderr, "         IMU result: %d (%s)\n", imuStatus, dwGetStatusName(imuStatus));
+                fprintf(stderr, "         IMU acceptance: %d (%s)\n", imuStatus, dwGetStatusName(imuStatus));
                 fflush(stderr);
         }
         
@@ -477,6 +458,34 @@ private:
         
         return bestMatch;
     }
+    bool isValidIMU(const dwIMUFrame& imuFrame) {
+        // Method 1: Check magnitude of acceleration (should be near gravity ~9.81 m/s²)
+        float accelMagnitude = std::sqrt(
+            imuFrame.acceleration[0] * imuFrame.acceleration[0] +
+            imuFrame.acceleration[1] * imuFrame.acceleration[1] +
+            imuFrame.acceleration[2] * imuFrame.acceleration[2]
+        );
+        
+        // For stationary vehicle, expect accel magnitude close to 9.81 m/s² (gravity)
+        // Allow range: 8.0 to 11.0 m/s² to account for vehicle tilt and sensor noise
+        const float MIN_ACCEL = 8.0f;
+        const float MAX_ACCEL = 11.0f;
+        
+        bool accelValid = (accelMagnitude >= MIN_ACCEL && accelMagnitude <= MAX_ACCEL);
+        
+        // Method 2: Check if all values are exactly zero (placeholder frame)
+        bool isZeroFrame = (imuFrame.acceleration[0] == 0.0f &&
+                        imuFrame.acceleration[1] == 0.0f &&
+                        imuFrame.acceleration[2] == 0.0f &&
+                        imuFrame.turnrate[0] == 0.0f &&
+                        imuFrame.turnrate[1] == 0.0f &&
+                        imuFrame.turnrate[2] == 0.0f);
+        
+        // Method 3: Check validity flags (if available)
+        // bool flagsValid = (imuFrame.validityFlags & DW_IMU_ACCELERATION_VALID) != 0;
+        
+        return accelValid && !isZeroFrame;
+    }
 
     bool drainSensorEventsToBuffers() {
             static uint32_t drainageCallCount = 0;
@@ -525,9 +534,6 @@ private:
             
             auto overallStart = std::chrono::steady_clock::now();
             
-            // CRITICAL FIX: Shorter budgets
-            // Catch-up: 8ms (allows 5 passes of 1.6ms each)
-            // Normal: 5ms (leaves 5ms for fusion at 100Hz)
             int budgetUs = catchUpMode ? 8000 : 5000;
             auto totalBudgetEnd = overallStart + std::chrono::microseconds(budgetUs);
             
@@ -579,7 +585,13 @@ private:
                             
                         case DW_SENSOR_IMU:
                             if (acquiredEvent->sensorIndex == m_imuSensorIdx) {
-                                imuUpdates.emplace_back(timestamp, acquiredEvent->imuFrame);
+                                bool isValidIMUFrame = isValidIMU(acquiredEvent->imuFrame);
+                                if (isValidIMUFrame) {
+                                    imuUpdates.emplace_back(timestamp, acquiredEvent->imuFrame);
+                                } else {
+                                    fprintf(stderr, "           → Skipping zero/invalid IMU frame\n");
+                                    fflush(stderr);
+                                }
                             }
                             imuCount++;
                             break;
@@ -686,6 +698,7 @@ private:
             
             return catchUpMode;
         }
+
     void bufferGPSData(const dwGPSFrame& gpsFrame) {
         dwTime_t timestamp = gpsFrame.timestamp_us;
         
@@ -1662,7 +1675,7 @@ public:
         if (!isPaused() && !m_shallRender)
             return;
 
-        m_shallRender = false;
+        m_shallRender = true;
 
         if (isOffscreen())
             return;

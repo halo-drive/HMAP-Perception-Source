@@ -54,8 +54,8 @@ public:
         
         // Real-time processing parameters
         dwTime_t velocityLatencyCompensation_us = 20000; // 20ms
-        float32_t velocityFactor = 1.609344f;
-        dwTime_t temporalWindow_us = 25000;           // 25ms temporal coherency window
+        float32_t velocityFactor = 1.0f;
+        dwTime_t temporalWindow_us = 500000;           // 500ms temporal coherency window
         dwTime_t stateCommitInterval_us = 10000;      // 10ms state commit interval
     };
 
@@ -145,8 +145,6 @@ private:
                     referenceTime, temporalWindow, requireWheelSpeeds);
             fflush(stderr);
             
-            // REMOVED: std::lock_guard<std::mutex> lock(stateMutex);
-            // Caller must already hold stateMutex!
             
             fprintf(stderr, "       lastSpeedUpdate=%lu (age=%lu µs)\n",
                     stateBuffer.lastSpeedUpdate, referenceTime - stateBuffer.lastSpeedUpdate);
@@ -178,6 +176,8 @@ private:
             return baseCoherent;
         }
 
+
+        
         bool isStateComplete() const {
             fprintf(stderr, "       Checking state completeness...\n");
             fflush(stderr);
@@ -210,7 +210,7 @@ private:
     
     // Timeout thresholds (microseconds)
     static constexpr dwTime_t DEFAULT_MESSAGE_TIMEOUT = 50000;     // 50ms
-    static constexpr dwTime_t DEFAULT_TEMPORAL_WINDOW = 25000;      // 25ms
+    static constexpr dwTime_t DEFAULT_TEMPORAL_WINDOW = 500000;      // 500ms
     
     // Maximum allowed values for validation
     static constexpr float32_t MAX_VEHICLE_SPEED = 100.0f;          // m/s
