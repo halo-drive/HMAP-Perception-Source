@@ -97,6 +97,16 @@ private:
         dwTime_t committedStateTimestamp{0};
         std::atomic<bool> hasValidCommittedState{false};
         
+
+        static constexpr uint32_t DW_VIO_SPEED_QUALITY_E_S_C_VALID = 1;
+        static constexpr uint32_t DW_VIO_WHEEL_SPEED_QUALITY_VALID = 1;
+        static constexpr uint32_t DW_VIO_FRONT_STEERING_ANGLE_QUALITY_VALID = 1;
+        static constexpr uint32_t DW_VIO_WHEEL_TICKS_DIRECTION_FORWARD = 1;
+        static constexpr uint32_t DW_VIO_WHEEL_TICKS_DIRECTION_BACKWARD = 2;
+        static constexpr uint32_t DW_VIO_WHEEL_TICKS_DIRECTION_STANDSTILL = 3;
+        static constexpr uint32_t DW_VIO_VEHICLE_STOPPED_STOPPED = 1;
+        static constexpr uint32_t DW_VIO_VEHICLE_STOPPED_MOVING = 2;
+        
         // State assembly buffer (protected by stateMutex)
         struct StateBuffer {
             dwVehicleIOSafetyState pendingSafety{};
@@ -140,64 +150,33 @@ private:
         
         bool isTemporallyCoherent(dwTime_t referenceTime, dwTime_t temporalWindow, 
                   bool requireWheelSpeeds = false) const {
-            fprintf(stderr, "       Checking temporal coherency...\n");
-            fprintf(stderr, "       referenceTime=%lu, window=%lu, requireWheels=%d\n",
-                    referenceTime, temporalWindow, requireWheelSpeeds);
-            fflush(stderr);
-            
-            
-            fprintf(stderr, "       lastSpeedUpdate=%lu (age=%lu µs)\n",
-                    stateBuffer.lastSpeedUpdate, referenceTime - stateBuffer.lastSpeedUpdate);
-            fprintf(stderr, "       lastSteeringUpdate=%lu (age=%lu µs)\n",
-                    stateBuffer.lastSteeringUpdate, referenceTime - stateBuffer.lastSteeringUpdate);
-            fflush(stderr);
             
             bool baseCoherent = (referenceTime - stateBuffer.lastSpeedUpdate <= temporalWindow) &&
                             (referenceTime - stateBuffer.lastSteeringUpdate <= temporalWindow);
             
-            fprintf(stderr, "       Base coherent: %s\n", baseCoherent ? "YES" : "NO");
-            fflush(stderr);
+            
             
             if (requireWheelSpeeds) {
-                fprintf(stderr, "       lastWheelSpeedUpdate=%lu (age=%lu µs)\n",
-                        stateBuffer.lastWheelSpeedUpdate, 
-                        referenceTime - stateBuffer.lastWheelSpeedUpdate);
-                fflush(stderr);
                 
                 bool result = baseCoherent && 
                     (referenceTime - stateBuffer.lastWheelSpeedUpdate <= temporalWindow);
-                fprintf(stderr, "       Final result (with wheels): %s\n", result ? "YES" : "NO");
-                fflush(stderr);
+
                 return result;
             }
             
-            fprintf(stderr, "       Final result: %s\n", baseCoherent ? "YES" : "NO");
-            fflush(stderr);
             return baseCoherent;
         }
 
 
         
         bool isStateComplete() const {
-            fprintf(stderr, "       Checking state completeness...\n");
-            fflush(stderr);
-            
-            // REMOVED: std::lock_guard<std::mutex> lock(stateMutex);
-            // Caller must already hold stateMutex!
-            
             bool result = stateBuffer.hasSpeed && stateBuffer.hasSteering;
-            
-            fprintf(stderr, "       hasSpeed=%d, hasSteering=%d, complete=%d\n",
-                    stateBuffer.hasSpeed, stateBuffer.hasSteering, result);
-            fflush(stderr);
-            
             return result;
         }
     };
     
     // Configuration and core components
     VehicleCANConfiguration m_configuration;
-    dwEgomotionSpeedMeasurementType m_speedMeasurementType;
     std::unique_ptr<SynchronizedVehicleState> m_vehicleState;
     
     // Parser state management
@@ -225,7 +204,6 @@ public:
     /// Initialization methods
     bool initializeFromRig(dwRigHandle_t rigConfig, const char* vehicleSensorName);
     bool loadVehicleConfiguration(const VehicleCANConfiguration& config);
-    void configureSpeedMeasurementType(dwEgomotionSpeedMeasurementType type);
     bool isInitialized() const { return m_isInitialized.load(); }
 
     /// Real-time CAN message processing
@@ -239,6 +217,9 @@ public:
     dwVehicleIONonSafetyState getNonSafetyState() const;
     bool hasValidState() const;
     
+    void getCurrentState(dwVehicleIOSafetyState* safety, 
+                     dwVehicleIONonSafetyState* nonSafety,
+                     dwVehicleIOActuationFeedback* actuation);
     /// Diagnostics and monitoring
     const ParserDiagnostics& getDiagnostics() const { return *m_diagnostics; }
     void resetDiagnostics();
