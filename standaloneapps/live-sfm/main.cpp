@@ -254,15 +254,33 @@ public:
             int res;
             res = chdir(getArgument("baseDir").c_str());
             (void)res;
+            log("=== Initializing rig from file: %s\n", getArgument("rig").c_str());
             CHECK_DW_ERROR(dwRig_initializeFromFile(&rigConfig, m_context, getArgument("rig").c_str()));
+            log("=== Rig initialized successfully\n");
+
+            // Count cameras in rig
+            uint32_t cameraCount = 0;
+            CHECK_DW_ERROR(dwRig_getSensorCountOfType(&cameraCount, DW_SENSOR_CAMERA, rigConfig));
+            log("=== Found %u cameras in rig\n", cameraCount);
+            
+            // Print each camera's parameters
+            for (uint32_t i = 0; i < cameraCount; i++) {
+                uint32_t sensorIdx = 0;
+                CHECK_DW_ERROR(dwRig_findSensorByTypeIndex(&sensorIdx, DW_SENSOR_CAMERA, i, rigConfig));
+                const char* params = nullptr;
+                CHECK_DW_ERROR(dwRig_getSensorParameterUpdatedPath(&params, sensorIdx, rigConfig));
+                log("=== Camera %u parameters: %s\n", i, params);
+            }
 
             // Sensor manager - automatically enables all sensors from rig.json
             // For live cameras (GMSL), set singleVirtualCameraGroup to false
             // For virtual/recorded cameras, can be true for synchronized groups
             dwSensorManagerParams sensorManagerParams    = {};
             sensorManagerParams.singleVirtualCameraGroup = false; // Allow independent camera events for live cameras
+            log("=== Initializing SensorManager with pool size 10\n");
             // All sensors (cameras, CAN, etc.) will be automatically enabled from rig.json
             CHECK_DW_ERROR(dwSensorManager_initializeFromRigWithParams(&sensorManager, rigConfig, &sensorManagerParams, 10, sal));
+            log("=== SensorManager initialized successfully\n");
 
             // Add can sensor
 
@@ -270,11 +288,15 @@ public:
             {
                 auto& camera = cameras[k];
 
+                log("=== Configuring camera %zu\n", k);
                 uint32_t cameraIndex{};
                 CHECK_DW_ERROR(dwSensorManager_getSensorIndex(&cameraIndex, DW_SENSOR_CAMERA, k, sensorManager));
+                log("=== Camera %zu sensor index: %u\n", k, cameraIndex);
                 CHECK_DW_ERROR(dwSensorManager_getSensorHandle(&camera.camera, cameraIndex, sensorManager));
                 CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera.cameraProps, camera.camera));
                 CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&camera.cameraImageProps, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, camera.camera));
+                log("=== Camera %zu configured: %ux%u @ %.1f fps\n", k, 
+                    camera.cameraImageProps.width, camera.cameraImageProps.height, camera.cameraProps.framerate);
 
                 // Pyramids
                 CHECK_DW_ERROR(dwPyramid_create(&camera.pyramidCurrent, 3, camera.cameraImageProps.width,
@@ -342,7 +364,6 @@ public:
                                                             m_context));
             }
 
-            // we would like the application run as fast as the original video
             setProcessRate(cameras[0].cameraProps.framerate);
         }
 
@@ -433,7 +454,11 @@ public:
         // -----------------------------
         // Start Sensors
         // -----------------------------
+        // dwSensorManager_start handles starting SAL internally - do NOT call dwSAL_start manually
+        // (Unlike manual sensor creation which requires dwSAL_start before dwSensor_start)
+        log("=== Starting SensorManager (this will start all cameras, CAN, etc.)\n");
         CHECK_DW_ERROR(dwSensorManager_start(sensorManager));
+        log("=== SensorManager started successfully - all cameras are now running\n");
 
         return true;
     }
@@ -807,7 +832,10 @@ public:
             case DW_SENSOR_COUNT:
             case DW_SENSOR_DATA:
             default:
-                throw std::runtime_error("Unexpected event type");
+                // Ignore unsupported/non-used sensor events (IMU, GPS, TIME, etc.)
+                // They may be present in the rig but are not used by this SfM sample.
+                log("Ignoring unsupported sensor event type: %d\n", static_cast<int32_t>(event->type));
+                break;
             }
 
             CHECK_DW_ERROR(dwSensorManager_releaseAcquiredEvent(event, sensorManager));
