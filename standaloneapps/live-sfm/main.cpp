@@ -103,10 +103,11 @@ private:
     dwContextHandle_t m_context           = DW_NULL_HANDLE;
     dwVisualizationContextHandle_t m_viz  = DW_NULL_HANDLE;
     dwRenderEngineHandle_t m_renderEngine = DW_NULL_HANDLE;
-    dwSALHandle_t sal                     = DW_NULL_HANDLE;
-
-    dwSensorManagerHandle_t sensorManager = DW_NULL_HANDLE;
-    dwRigHandle_t rigConfig               = DW_NULL_HANDLE;
+    dwSALHandle_t sal       = DW_NULL_HANDLE;
+    dwRigHandle_t rigConfig = DW_NULL_HANDLE;
+    
+    // Individual sensor handles (like camera_extra)
+    dwSensorHandle_t canSensor = DW_NULL_HANDLE;
 
     // ------------------------------------------------
     // Sample specific variables
@@ -130,8 +131,8 @@ private:
     // Per-camera data
     struct CameraData
     {
-        // Sensor
-        dwSensorHandle_t camera            = DW_NULL_HANDLE;
+        // Sensor (individual handle like camera_extra)
+        dwSensorHandle_t sensor            = DW_NULL_HANDLE;
         dwImageStreamerHandle_t image2GL   = DW_NULL_HANDLE;
         dwCameraProperties cameraProps     = {};
         dwImageProperties cameraImageProps = {};
@@ -254,49 +255,44 @@ public:
             int res;
             res = chdir(getArgument("baseDir").c_str());
             (void)res;
-            log("=== Initializing rig from file: %s\n", getArgument("rig").c_str());
             CHECK_DW_ERROR(dwRig_initializeFromFile(&rigConfig, m_context, getArgument("rig").c_str()));
-            log("=== Rig initialized successfully\n");
 
-            // Count cameras in rig
-            uint32_t cameraCount = 0;
-            CHECK_DW_ERROR(dwRig_getSensorCountOfType(&cameraCount, DW_SENSOR_CAMERA, rigConfig));
-            log("=== Found %u cameras in rig\n", cameraCount);
+            // Create sensors individually (like camera_extra) instead of using SensorManager
+            log("=== Creating sensors individually from rig\n");
             
-            // Print each camera's parameters
-            for (uint32_t i = 0; i < cameraCount; i++) {
-                uint32_t sensorIdx = 0;
-                CHECK_DW_ERROR(dwRig_findSensorByTypeIndex(&sensorIdx, DW_SENSOR_CAMERA, i, rigConfig));
-                const char* params = nullptr;
-                CHECK_DW_ERROR(dwRig_getSensorParameterUpdatedPath(&params, sensorIdx, rigConfig));
-                log("=== Camera %u parameters: %s\n", i, params);
-            }
-
-            // Sensor manager - automatically enables all sensors from rig.json
-            // For live cameras (GMSL), set singleVirtualCameraGroup to false
-            // For virtual/recorded cameras, can be true for synchronized groups
-            dwSensorManagerParams sensorManagerParams    = {};
-            sensorManagerParams.singleVirtualCameraGroup = false; // Allow independent camera events for live cameras
-            log("=== Initializing SensorManager with pool size 10\n");
-            // All sensors (cameras, CAN, etc.) will be automatically enabled from rig.json
-            CHECK_DW_ERROR(dwSensorManager_initializeFromRigWithParams(&sensorManager, rigConfig, &sensorManagerParams, 10, sal));
-            log("=== SensorManager initialized successfully\n");
-
-            // Add can sensor
-
+            // Create CAN sensor
+            uint32_t canSensorIdx = 0;
+            CHECK_DW_ERROR(dwRig_findSensorByName(&canSensorIdx, "can", rigConfig));
+            const char* canProtocol = nullptr;
+            const char* canParams = nullptr;
+            CHECK_DW_ERROR(dwRig_getSensorProtocol(&canProtocol, canSensorIdx, rigConfig));
+            CHECK_DW_ERROR(dwRig_getSensorParameterUpdatedPath(&canParams, canSensorIdx, rigConfig));
+            dwSensorParams canSensorParams{};
+            canSensorParams.protocol = canProtocol;
+            canSensorParams.parameters = canParams;
+            log("=== Creating CAN sensor: %s\n", canParams);
+            CHECK_DW_ERROR(dwSAL_createSensor(&canSensor, canSensorParams, sal));
+            
+            // Create each camera sensor individually
             for (size_t k = 0; k < CAMERA_COUNT; k++)
             {
                 auto& camera = cameras[k];
-
-                log("=== Configuring camera %zu\n", k);
-                uint32_t cameraIndex{};
-                CHECK_DW_ERROR(dwSensorManager_getSensorIndex(&cameraIndex, DW_SENSOR_CAMERA, k, sensorManager));
-                log("=== Camera %zu sensor index: %u\n", k, cameraIndex);
-                CHECK_DW_ERROR(dwSensorManager_getSensorHandle(&camera.camera, cameraIndex, sensorManager));
-                CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera.cameraProps, camera.camera));
-                CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&camera.cameraImageProps, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, camera.camera));
-                log("=== Camera %zu configured: %ux%u @ %.1f fps\n", k, 
-                    camera.cameraImageProps.width, camera.cameraImageProps.height, camera.cameraProps.framerate);
+                
+                // Get camera parameters from rig
+                uint32_t cameraSensorIdx = 0;
+                CHECK_DW_ERROR(dwRig_findSensorByTypeIndex(&cameraSensorIdx, DW_SENSOR_CAMERA, k, rigConfig));
+                const char* cameraProtocol = nullptr;
+                const char* cameraParams = nullptr;
+                CHECK_DW_ERROR(dwRig_getSensorProtocol(&cameraProtocol, cameraSensorIdx, rigConfig));
+                CHECK_DW_ERROR(dwRig_getSensorParameterUpdatedPath(&cameraParams, cameraSensorIdx, rigConfig));
+                dwSensorParams cameraSensorParams{};
+                cameraSensorParams.protocol = cameraProtocol;
+                cameraSensorParams.parameters = cameraParams;
+                
+                log("=== Creating camera %zu: %s\n", k, cameraParams);
+                CHECK_DW_ERROR(dwSAL_createSensor(&camera.sensor, cameraSensorParams, sal));
+                CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera.cameraProps, camera.sensor));
+                CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&camera.cameraImageProps, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, camera.sensor));
 
                 // Pyramids
                 CHECK_DW_ERROR(dwPyramid_create(&camera.pyramidCurrent, 3, camera.cameraImageProps.width,
@@ -355,7 +351,7 @@ public:
 
                 // Streamer pipeline
                 dwImageProperties displayImageProps{};
-                CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&displayImageProps, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, camera.camera));
+                CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&displayImageProps, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, camera.sensor));
 
                 // image2GL is either from NvMedia or CUDA, depending on camera
                 CHECK_DW_ERROR(dwImageStreamerGL_initialize(&camera.image2GL,
@@ -364,6 +360,7 @@ public:
                                                             m_context));
             }
 
+            // we would like the application run as fast as the original video
             setProcessRate(cameras[0].cameraProps.framerate);
         }
 
@@ -376,7 +373,7 @@ public:
         egoparams.vehicle         = *vehicle;
         egoparams.motionModel     = DW_EGOMOTION_ODOMETRY;
         egoparams.automaticUpdate = true;
-        egoparams.speedMeasurementType = DW_EGOMOTION_REAR_WHEEL_SPEED; // Default, configure via rig.json if needed
+        egoparams.speedMeasurementType = DW_EGOMOTION_REAR_WHEEL_SPEED; // Configure via rig.json if needed
         CHECK_DW_ERROR(dwEgomotion_initialize(&egomotion, &egoparams, m_context));
 
         // Initialize SygnalPomoParser (replaces VehicleIO plugin)
@@ -452,13 +449,22 @@ public:
         }
 
         // -----------------------------
-        // Start Sensors
+        // Start Sensors (like camera_extra)
         // -----------------------------
-        // dwSensorManager_start handles starting SAL internally - do NOT call dwSAL_start manually
-        // (Unlike manual sensor creation which requires dwSAL_start before dwSensor_start)
-        log("=== Starting SensorManager (this will start all cameras, CAN, etc.)\n");
-        CHECK_DW_ERROR(dwSensorManager_start(sensorManager));
-        log("=== SensorManager started successfully - all cameras are now running\n");
+        log("=== Starting SAL\n");
+        CHECK_DW_ERROR(dwSAL_start(sal));
+        
+        // Start CAN sensor
+        log("=== Starting CAN sensor\n");
+        CHECK_DW_ERROR(dwSensor_start(canSensor));
+        
+        // Start each camera sensor
+        for (size_t k = 0; k < CAMERA_COUNT; k++)
+        {
+            log("=== Starting camera %zu\n", k);
+            CHECK_DW_ERROR(dwSensor_start(cameras[k].sensor));
+        }
+        log("=== All sensors started successfully\n");
 
         return true;
     }
@@ -468,9 +474,19 @@ public:
     ///------------------------------------------------------------------------------
     void onReset() override
     {
-        dwSensorManager_stop(sensorManager);
-        dwSensorManager_reset(sensorManager);
-        dwSensorManager_start(sensorManager);
+        // Stop all sensors
+        dwSensor_stop(canSensor);
+        for (auto& camera : cameras)
+            dwSensor_stop(camera.sensor);
+        
+        // Reset SAL and sensors
+        dwSAL_reset(sal);
+        
+        // Restart sensors
+        dwSensor_start(canSensor);
+        for (auto& camera : cameras)
+            dwSensor_start(camera.sensor);
+        
         dwEgomotion_reset(egomotion);
         if (m_canParser) {
             m_canParser->resetDiagnostics();
@@ -497,10 +513,16 @@ public:
     ///------------------------------------------------------------------------------
     void onRelease() override
     {
-        // stop sensor
-        dwSensorManager_stop(sensorManager);
+        // Stop all sensors
+        dwSensor_stop(canSensor);
+        for (auto& camera : cameras)
+            dwSensor_stop(camera.sensor);
 
-        dwSensorManager_release(sensorManager);
+        // Release sensors
+        dwSAL_releaseSensor(canSensor);
+        for (auto& camera : cameras)
+            dwSAL_releaseSensor(camera.sensor);
+            
         dwRig_release(rigConfig);
 
         if (m_renderEngine != DW_NULL_HANDLE)
@@ -791,54 +813,61 @@ public:
         for (auto& camera : cameras)
             releaseFrame(camera);
 
-        while (!isAllCamerasReady())
+        // Read frames from each camera individually (like camera_extra)
+        bool allCamerasReady = true;
+        
+        for (size_t k = 0; k < CAMERA_COUNT; k++)
         {
-            const dwSensorEvent* event;
+            auto& camera = cameras[k];
+            dwStatus status = dwSensorCamera_readFrame(&camera.frame, 100000, camera.sensor);
+            
+            if (status == DW_END_OF_STREAM)
             {
-                dwStatus status;
-                status = dwSensorManager_acquireNextEvent(&event, 0, sensorManager);
-                if (status == DW_END_OF_STREAM)
+                if (should_AutoExit())
                 {
-                    if (should_AutoExit())
-                    {
-                        log("AutoExit was set, stopping the sample because reached the end of the data stream\n");
-                        stop();
-                        return;
-                    }
-                    reset();
+                    log("AutoExit was set, stopping the sample\n");
+                    stop();
                     return;
                 }
+                reset();
+                return;
             }
-
-            // Process event
-            switch (event->type)
+            else if (status == DW_TIME_OUT)
             {
-            case DW_SENSOR_CAMERA:
+                log("Camera %zu timeout, retrying...\n", k);
+                allCamerasReady = false;
+                continue;
+            }
+            else if (status != DW_SUCCESS)
             {
-                processCamera(*event);
-                break;
+                log("Camera %zu read error: %d\n", k, status);
+                allCamerasReady = false;
+                continue;
             }
-            case DW_SENSOR_CAN:
-            {
-                processCan(*event);
-                break;
+            
+            // Get images from frame
+            CHECK_DW_ERROR(dwSensorCamera_getImage(&camera.frameCudaYuv, DW_CAMERA_OUTPUT_CUDA_YUV420_UINT8_SEMIPLANAR, camera.frame));
+            CHECK_DW_ERROR(dwSensorCamera_getImage(&camera.frameCudaRgba, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, camera.frame));
+            
+            // Send to GL streamer
+            CHECK_DW_ERROR(dwImageStreamerGL_producerSend(camera.frameCudaRgba, camera.image2GL));
+            CHECK_DW_ERROR(dwImageStreamerGL_consumerReceive(&camera.frameGL, 30000, camera.image2GL));
+        }
+        
+        // Only proceed if all cameras have valid frames
+        if (!allCamerasReady)
+        {
+            log("Not all cameras ready, skipping this cycle\n");
+            return;
+        }
+        
+        // Process CAN data (non-blocking) using SygnalPomoParser
+        dwCANMessage canMsg;
+        while (dwSensorCAN_readMessage(&canMsg, 0, canSensor) == DW_SUCCESS)
+        {
+            if (m_canParser && m_canParser->isInitialized()) {
+                m_canParser->processCANFrame(canMsg);
             }
-            case DW_SENSOR_LIDAR:
-            case DW_SENSOR_GPS:
-            case DW_SENSOR_IMU:
-            case DW_SENSOR_RADAR:
-            case DW_SENSOR_TIME:
-            case DW_SENSOR_ULTRASONIC:
-            case DW_SENSOR_COUNT:
-            case DW_SENSOR_DATA:
-            default:
-                // Ignore unsupported/non-used sensor events (IMU, GPS, TIME, etc.)
-                // They may be present in the rig but are not used by this SfM sample.
-                log("Ignoring unsupported sensor event type: %d\n", static_cast<int32_t>(event->type));
-                break;
-            }
-
-            CHECK_DW_ERROR(dwSensorManager_releaseAcquiredEvent(event, sensorManager));
         }
 
         updatePose();
@@ -846,24 +875,7 @@ public:
         getProfilerCUDA()->collectTimers();
     }
 
-    void processCamera(const dwSensorEvent& event)
-    {
-        if (event.numCamFrames != CAMERA_COUNT)
-            throw std::runtime_error("All cameras should come in simultaneously");
-
-        for (size_t k = 0; k < event.numCamFrames; k++)
-        {
-            auto& camera = cameras[k];
-
-            // Get CUDA & GL images
-
-            CHECK_DW_ERROR(dwSensorCamera_getImage(&camera.frameCudaYuv, DW_CAMERA_OUTPUT_CUDA_YUV420_UINT8_SEMIPLANAR, event.camFrames[k]));
-            CHECK_DW_ERROR(dwSensorCamera_getImage(&camera.frameCudaRgba, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, event.camFrames[k]));
-
-            CHECK_DW_ERROR(dwImageStreamerGL_producerSend(camera.frameCudaRgba, camera.image2GL));
-            CHECK_DW_ERROR(dwImageStreamerGL_consumerReceive(&camera.frameGL, 30000, camera.image2GL));
-        }
-    }
+    // processCamera function removed - now reading frames directly in onProcess()
 
     dwFeatureArray trackFrame(size_t cameraIdx, const dwTransformation3f& predictedRig2World)
     {
@@ -929,48 +941,9 @@ public:
         cudaStreamSynchronize(cudaStream_t(0));
     }
 
-    void processCan(const dwSensorEvent& event)
-    {
-        if (!m_canParser || !m_canParser->isInitialized()) {
-            return;
-        }
-        
-        // Process CAN frame with parser
-        m_canParser->processCANFrame(event.canFrame);
-        
-        // Periodic timeout check
-        static dwTime_t lastTimeoutCheck = 0;
-        if (event.canFrame.timestamp_us - lastTimeoutCheck > 50000) {
-            m_canParser->checkMessageTimeouts(event.canFrame.timestamp_us);
-            lastTimeoutCheck = event.canFrame.timestamp_us;
-        }
-        
-        // Get synchronized vehicle state and feed to egomotion
-        dwVehicleIOSafetyState vehicleIOSafeState{};
-        dwVehicleIONonSafetyState vehicleIONonSafeState{};
-        dwVehicleIOActuationFeedback vehicleIOActuationFeedbackState{};
-        
-        if (m_canParser->getTemporallySynchronizedState(&vehicleIOSafeState, &vehicleIONonSafeState, &vehicleIOActuationFeedbackState)) {
-            // Validate state before sending to egomotion
-            if (vehicleIONonSafeState.speedESC >= 0.0f && vehicleIONonSafeState.speedESC < 100.0f &&
-                vehicleIOSafeState.size == sizeof(dwVehicleIOSafetyState) &&
-                vehicleIONonSafeState.size == sizeof(dwVehicleIONonSafetyState) &&
-                vehicleIOActuationFeedbackState.size == sizeof(dwVehicleIOActuationFeedback)) {
-                
-                CHECK_DW_ERROR(dwEgomotion_addVehicleIOState(&vehicleIOSafeState, &vehicleIONonSafeState, &vehicleIOActuationFeedbackState, egomotion));
-            }
-        }
-    }
+    // processCan function removed - now reading CAN messages directly in onProcess()
 
-    bool isAllCamerasReady()
-    {
-        for (auto& camera : cameras)
-        {
-            if (!camera.frameCudaYuv)
-                return false;
-        }
-        return true;
-    }
+    // isAllCamerasReady function removed - now checking during frame acquisition
     void updatePose()
     {
         dwTime_t now;
@@ -1089,6 +1062,11 @@ public:
         {
             CHECK_DW_ERROR(dwImageStreamerGL_consumerReturn(&camera.frameGL, camera.image2GL));
             CHECK_DW_ERROR(dwImageStreamerGL_producerReturn(nullptr, 33000, camera.image2GL));
+        }
+
+        if (camera.frame)
+        {
+            dwSensorCamera_returnFrame(&camera.frame);
         }
 
         camera.frameCudaYuv = nullptr;
