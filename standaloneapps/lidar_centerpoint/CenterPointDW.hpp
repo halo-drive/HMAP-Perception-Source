@@ -78,6 +78,16 @@
      bool inferOnPointCloud(const dwPointCloud& stitchedHost,
                             std::vector<DWBoundingBox>& outBoxes);
  
+     // Get BEV feature map for visualization/sharing with other models
+     // Returns host-side copy of BEV features (C x H x W = PFE_OUTPUT_DIM x BEV_H x BEV_W)
+     // Caller must allocate outBEV with size PFE_OUTPUT_DIM * BEV_H * BEV_W
+     bool getBEVFeatureMap(std::vector<float>& outBEV);
+ 
+     // Get heatmap (score map) for visualization/sharing with other models
+     // Returns host-side copy of score heatmap (H x W = OUTPUT_H x OUTPUT_W)
+     // Caller must allocate outHeatmap with size OUTPUT_H * OUTPUT_W
+     bool getHeatmap(std::vector<float>& outHeatmap);
+ 
  private:
      bool initializeEngines();
      bool allocateBuffers();

@@ -34,6 +34,8 @@ int32_t main(int32_t argc, const char** argv)
                               opt("rpnEngine", "", "Path to CenterPoint RPN TensorRT engine file"),
                               opt("objectDetection", "true", "Enable object detection (requires CenterPoint engines)"),
                               opt("minPoints", "120", "Minimum points required for valid detection (default: 120)"),
+                              opt("bevVisualization", "false", "Enable BEV feature map visualization"),
+                              opt("heatmapVisualization", "false", "Enable CenterPoint heatmap visualization"),
 
                               opt("freeSpace", "false", "Enable free space detection"),
                               opt("freeSpaceVisualization", "false", "Enable free space visualization"),

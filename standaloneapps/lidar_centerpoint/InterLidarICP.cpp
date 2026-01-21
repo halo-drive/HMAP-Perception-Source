@@ -45,7 +45,8 @@ InterLidarICP::InterLidarICP(const ProgramArguments& args)
     m_groundPlaneEnabled = getArgument("groundPlane") == "true";
     m_groundPlaneVisualizationEnabled = getArgument("groundPlaneVisualization") == "true";
     m_minPointsThreshold = static_cast<uint32_t>(atoi(getArgument("minPoints").c_str()));
-
+    m_bevVisualizationEnabled = getArgument("bevVisualization") == "true";
+    m_heatmapVisualizationEnabled = getArgument("heatmapVisualization") == "true";
 
     m_freeSpaceEnabled = getArgument("freeSpace") == "true";
     m_freeSpaceVisualizationEnabled = getArgument("freeSpaceVisualization") == "true";
@@ -858,6 +859,21 @@ void InterLidarICP::initRendering()
     // Initialize bounding box render buffer for object detection
     initBoundingBoxRenderBuffer();
 
+    // Initialize BEV and heatmap visualization tiles (if enabled)
+    if (m_bevVisualizationEnabled) {
+        tileParam.layout.viewport = {0.0f, 0.0f, 0.5f, 0.5f};
+        tileParam.layout.positionType = DW_RENDER_ENGINE_TILE_POSITION_TYPE_TOP_LEFT;
+        CHECK_DW_ERROR(dwRenderEngine_addTile(&m_bevTile.tileId, &tileParam, m_renderEngine));
+        std::cout << "BEV visualization tile initialized" << std::endl;
+    }
+
+    if (m_heatmapVisualizationEnabled) {
+        tileParam.layout.viewport = {0.5f, 0.0f, 0.5f, 0.5f};
+        tileParam.layout.positionType = DW_RENDER_ENGINE_TILE_POSITION_TYPE_TOP_LEFT;
+        CHECK_DW_ERROR(dwRenderEngine_addTile(&m_heatmapTile.tileId, &tileParam, m_renderEngine));
+        std::cout << "Heatmap visualization tile initialized" << std::endl;
+    }
+
     std::cout << "Rendering system initialized" << std::endl;
 }
 
@@ -1012,8 +1028,11 @@ bool InterLidarICP::initializeObjectDetection() {
     }
 
     // Initialize SORT-style tracker
-    m_tracker = std::make_unique<SimpleTracker>(0.3f, 3, 1);  // IOU threshold 0.3, max age 3, min hits 1
-    std::cout << "SORT-style tracker initialized" << std::endl;
+    // Parameters: IOU threshold, max age (frames), min hits
+    // maxAge: How many frames a track can survive without a match (higher = more persistent)
+    // Increasing from 3 to 7 helps with temporary occlusions or missed detections
+    m_tracker = std::make_unique<SimpleTracker>(0.3f, 7, 1);  // IOU threshold 0.3, max age 7, min hits 1
+    std::cout << "SORT-style tracker initialized (maxAge=7 frames)" << std::endl;
 
     std::cout << "CenterPoint object detection initialized successfully" << std::endl;
     return true;
@@ -1885,6 +1904,18 @@ void InterLidarICP::performObjectDetection()
     if (m_verbose) {
         std::cout << "CenterPoint object detection completed in " << duration.count()
                   << " ms, detections after filtering: " << m_currentBoxes.size() << std::endl;
+    }
+
+    // Fetch BEV and heatmap data for visualization (if enabled)
+    if (m_bevVisualizationEnabled || m_heatmapVisualizationEnabled) {
+        if (m_centerPointDetector) {
+            if (m_bevVisualizationEnabled) {
+                m_centerPointDetector->getBEVFeatureMap(m_bevFeatureMap);
+            }
+            if (m_heatmapVisualizationEnabled) {
+                m_centerPointDetector->getHeatmap(m_heatmapData);
+            }
+        }
     }
 }
 
@@ -3041,9 +3072,20 @@ void InterLidarICP::renderBoundingBoxes()
         int pointCount = countPointsInBox(box);
         float distance = std::sqrt(box.x * box.x + box.y * box.y);
         
-        // Class & confidence text
+        // Class, track ID (if available) & confidence text
         char labelText[64];
-        snprintf(labelText, sizeof(labelText), "%s (%.2f)", className.c_str(), box.confidence);
+        if (box.trackId >= 0)
+        {
+            // Example: "Vehicle#12 (0.85)"
+            snprintf(labelText, sizeof(labelText), "%s#%d (%.2f)",
+                     className.c_str(), box.trackId, box.confidence);
+        }
+        else
+        {
+            // Fallback: no ID available
+            snprintf(labelText, sizeof(labelText), "%s (%.2f)",
+                     className.c_str(), box.confidence);
+        }
         labelTexts.emplace_back(labelPos, std::string(labelText));
         
         // Debug text
@@ -3321,6 +3363,230 @@ void InterLidarICP::renderPointsInBox(const BoundingBox& box, const dwVector3f& 
         // Reset point size to default
         dwRenderEngine_setPointSize(1.0f, m_renderEngine);
     }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+void InterLidarICP::convertBEVToImage(const std::vector<float>& bevData, std::vector<uint8_t>& outImage)
+{
+    // BEV shape: C x H x W = PFE_OUTPUT_DIM x BEV_H x BEV_W
+    // Convert to grayscale by taking mean across channels, then normalize to 0-255
+    const int C = PFE_OUTPUT_DIM;
+    const int H = BEV_H;
+    const int W = BEV_W;
+    
+    outImage.resize(H * W * 3); // RGB image
+    
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            // Compute mean across channels for this spatial location
+            float sum = 0.0f;
+            for (int c = 0; c < C; ++c) {
+                int idx = c * H * W + y * W + x;
+                sum += bevData[idx];
+            }
+            float mean = sum / C;
+            
+            // Normalize to 0-1 range (assuming features are roughly in [-1, 1] or [0, 1])
+            // Apply tanh to squash to [-1, 1], then map to [0, 1]
+            float normalized = (std::tanh(mean) + 1.0f) * 0.5f;
+            
+            // Convert to 0-255 and apply colormap (grayscale for now)
+            uint8_t gray = static_cast<uint8_t>(normalized * 255.0f);
+            int imgIdx = (y * W + x) * 3;
+            outImage[imgIdx + 0] = gray;     // R
+            outImage[imgIdx + 1] = gray;     // G
+            outImage[imgIdx + 2] = gray;     // B
+        }
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+void InterLidarICP::convertHeatmapToImage(const std::vector<float>& heatmapData, std::vector<uint8_t>& outImage)
+{
+    // Heatmap shape: H x W = OUTPUT_H x OUTPUT_W
+    // Normalize scores to 0-255 and apply colormap (jet/hot colormap)
+    const int H = OUTPUT_H;
+    const int W = OUTPUT_W;
+    
+    outImage.resize(H * W * 3); // RGB image
+    
+    // Find min/max for normalization
+    float minVal = *std::min_element(heatmapData.begin(), heatmapData.end());
+    float maxVal = *std::max_element(heatmapData.begin(), heatmapData.end());
+    
+    // Debug output (first frame only)
+    static bool firstFrame = true;
+    if (firstFrame && m_verbose) {
+        std::cout << "[Heatmap] Min=" << minVal << ", Max=" << maxVal << std::endl;
+        firstFrame = false;
+    }
+    
+    // Use percentile-based normalization to handle outliers
+    // Find 95th percentile for better visualization
+    std::vector<float> sorted = heatmapData;
+    std::sort(sorted.begin(), sorted.end());
+    float p95 = sorted[static_cast<size_t>(sorted.size() * 0.95f)];
+    float p5 = sorted[static_cast<size_t>(sorted.size() * 0.05f)];
+    
+    // Clamp to reasonable range (scores are typically 0-1, but might have outliers)
+    float displayMax = std::max(0.1f, std::min(1.0f, p95)); // At least 0.1, cap at 1.0
+    float displayMin = std::max(0.0f, p5);
+    float range = std::max(0.001f, displayMax - displayMin);
+    
+    // Simple jet colormap: blue -> cyan -> green -> yellow -> red
+    auto jetColormap = [](float t) -> std::tuple<uint8_t, uint8_t, uint8_t> {
+        t = std::max(0.0f, std::min(1.0f, t));
+        float r, g, b;
+        if (t < 0.25f) {
+            b = 1.0f;
+            g = t * 4.0f;
+            r = 0.0f;
+        } else if (t < 0.5f) {
+            b = 1.0f - (t - 0.25f) * 4.0f;
+            g = 1.0f;
+            r = 0.0f;
+        } else if (t < 0.75f) {
+            b = 0.0f;
+            g = 1.0f;
+            r = (t - 0.5f) * 4.0f;
+        } else {
+            b = 0.0f;
+            g = 1.0f - (t - 0.75f) * 4.0f;
+            r = 1.0f;
+        }
+        return {static_cast<uint8_t>(r * 255.0f),
+                static_cast<uint8_t>(g * 255.0f),
+                static_cast<uint8_t>(b * 255.0f)};
+    };
+    
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            int idx = y * W + x;
+            // Clamp and normalize
+            float clamped = std::max(displayMin, std::min(displayMax, heatmapData[idx]));
+            float normalized = (clamped - displayMin) / range;
+            auto [r, g, b] = jetColormap(normalized);
+            
+            int imgIdx = (y * W + x) * 3;
+            outImage[imgIdx + 0] = r;
+            outImage[imgIdx + 1] = g;
+            outImage[imgIdx + 2] = b;
+        }
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+void InterLidarICP::renderBEVFeatureMap()
+{
+    if (!m_bevVisualizationEnabled || m_bevFeatureMap.empty()) {
+        return;
+    }
+    
+    // Convert BEV to image data (refresh each frame)
+    convertBEVToImage(m_bevFeatureMap, m_bevImageData);
+    
+    // Set tile for BEV visualization
+    dwRenderEngine_setTile(m_bevTile.tileId, m_renderEngine);
+    dwRenderEngine_setModelView(&DW_IDENTITY_MATRIX4F, m_renderEngine);
+    
+    // Set 2D coordinate range to match image dimensions
+    dwVector2f range{static_cast<float>(BEV_W), static_cast<float>(BEV_H)};
+    dwRenderEngine_setCoordinateRange2D(range, m_renderEngine);
+    
+    // OPTIMIZED: Use point rendering instead of triangles (much faster)
+    // Render every 4th pixel as a colored point
+    const int step = 4;
+    std::vector<dwVector2f> points;
+    std::vector<dwRenderEngineColorRGBA> colors;
+    points.reserve((BEV_H / step) * (BEV_W / step));
+    colors.reserve((BEV_H / step) * (BEV_W / step));
+    
+    for (int y = 0; y < BEV_H; y += step) {
+        for (int x = 0; x < BEV_W; x += step) {
+            int idx = (y * BEV_W + x) * 3;
+            if (idx + 2 < static_cast<int>(m_bevImageData.size())) {
+                uint8_t r = m_bevImageData[idx];
+                uint8_t g = m_bevImageData[idx + 1];
+                uint8_t b = m_bevImageData[idx + 2];
+                
+                points.push_back({static_cast<float>(x), static_cast<float>(y)});
+                colors.push_back({r / 255.0f, g / 255.0f, b / 255.0f, 1.0f});
+            }
+        }
+    }
+    
+    // Render all points at once (much faster than individual triangles)
+    if (!points.empty()) {
+        dwRenderEngine_setPointSize(static_cast<float>(step), m_renderEngine);
+        for (size_t i = 0; i < points.size(); ++i) {
+            dwRenderEngine_setColor(colors[i], m_renderEngine);
+            dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_2D,
+                                 &points[i], sizeof(dwVector2f), 0, 1, m_renderEngine);
+        }
+        dwRenderEngine_setPointSize(1.0f, m_renderEngine);
+    }
+    
+    // Add label
+    dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_20, m_renderEngine);
+    dwRenderEngine_setColor({1.0f, 1.0f, 1.0f, 1.0f}, m_renderEngine);
+    dwRenderEngine_renderText2D("BEV Feature Map", {10.0f, 30.0f}, m_renderEngine);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+void InterLidarICP::renderHeatmap()
+{
+    if (!m_heatmapVisualizationEnabled || m_heatmapData.empty()) {
+        return;
+    }
+    
+    // Convert heatmap to image data (refresh each frame)
+    convertHeatmapToImage(m_heatmapData, m_heatmapImageData);
+    
+    // Set tile for heatmap visualization
+    dwRenderEngine_setTile(m_heatmapTile.tileId, m_renderEngine);
+    dwRenderEngine_setModelView(&DW_IDENTITY_MATRIX4F, m_renderEngine);
+    
+    // Set 2D coordinate range to match image dimensions
+    dwVector2f range{static_cast<float>(OUTPUT_W), static_cast<float>(OUTPUT_H)};
+    dwRenderEngine_setCoordinateRange2D(range, m_renderEngine);
+    
+    // OPTIMIZED: Use point rendering instead of triangles (much faster)
+    // Render every 2nd pixel as a colored point
+    const int step = 2;
+    std::vector<dwVector2f> points;
+    std::vector<dwRenderEngineColorRGBA> colors;
+    points.reserve((OUTPUT_H / step) * (OUTPUT_W / step));
+    colors.reserve((OUTPUT_H / step) * (OUTPUT_W / step));
+    
+    for (int y = 0; y < OUTPUT_H; y += step) {
+        for (int x = 0; x < OUTPUT_W; x += step) {
+            int idx = (y * OUTPUT_W + x) * 3;
+            if (idx + 2 < static_cast<int>(m_heatmapImageData.size())) {
+                uint8_t r = m_heatmapImageData[idx];
+                uint8_t g = m_heatmapImageData[idx + 1];
+                uint8_t b = m_heatmapImageData[idx + 2];
+                
+                points.push_back({static_cast<float>(x), static_cast<float>(y)});
+                colors.push_back({r / 255.0f, g / 255.0f, b / 255.0f, 1.0f});
+            }
+        }
+    }
+    
+    // Render all points at once (much faster than individual triangles)
+    if (!points.empty()) {
+        dwRenderEngine_setPointSize(static_cast<float>(step), m_renderEngine);
+        for (size_t i = 0; i < points.size(); ++i) {
+            dwRenderEngine_setColor(colors[i], m_renderEngine);
+            dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_2D,
+                                 &points[i], sizeof(dwVector2f), 0, 1, m_renderEngine);
+        }
+        dwRenderEngine_setPointSize(1.0f, m_renderEngine);
+    }
+    
+    // Add label
+    dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_20, m_renderEngine);
+    dwRenderEngine_setColor({1.0f, 1.0f, 1.0f, 1.0f}, m_renderEngine);
+    dwRenderEngine_renderText2D("CenterPoint Heatmap", {10.0f, 30.0f}, m_renderEngine);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3917,6 +4183,16 @@ void InterLidarICP::onRender()
         if (m_verbose) {
             std::cout << "[RENDER-DEBUG] Free space rendered in ICP tile" << std::endl;
         }
+    }
+
+    // Render BEV feature map visualization
+    if (m_bevVisualizationEnabled && !m_bevFeatureMap.empty()) {
+        renderBEVFeatureMap();
+    }
+
+    // Render heatmap visualization
+    if (m_heatmapVisualizationEnabled && !m_heatmapData.empty()) {
+        renderHeatmap();
     }
 
 

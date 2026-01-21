@@ -135,6 +135,8 @@ private:
     bool m_objectDetectionEnabled = true;
     bool m_groundPlaneEnabled = true;
     bool m_groundPlaneVisualizationEnabled = true;
+    bool m_bevVisualizationEnabled = false;  // BEV feature map visualization
+    bool m_heatmapVisualizationEnabled = false;  // Heatmap visualization
     bool m_paused = false;  // Simple pause mechanism
     uint32_t m_minPointsThreshold = 120;  // Minimum points required for valid detection
 
@@ -218,6 +220,12 @@ private:
     int m_nextTrackID = 0;
     std::unique_ptr<SimpleTracker> m_tracker;  // SORT-style tracker
     
+    // BEV and heatmap visualization data
+    std::vector<float> m_bevFeatureMap;  // BEV feature map data (C x H x W)
+    std::vector<float> m_heatmapData;     // Heatmap data (H x W)
+    std::vector<uint8_t> m_bevImageData;   // BEV RGB image data for rendering
+    std::vector<uint8_t> m_heatmapImageData; // Heatmap RGB image data for rendering
+    
     // Point cloud for object detection
     std::unique_ptr<float32_t[]> m_pointCloudForDetection;
     
@@ -272,6 +280,8 @@ private:
     WindowTile m_lidarTiles[NUM_LIDARS];  // Individual lidar views
     WindowTile m_stitchedTile;            // Stitched view
     WindowTile m_icpTile;                 // ICP alignment view
+    WindowTile m_bevTile;                 // BEV feature map visualization tile
+    WindowTile m_heatmapTile;             // Heatmap visualization tile
     
     // Ground plane rendering
     uint32_t m_groundPlaneRenderBufferId = 0;
@@ -395,6 +405,12 @@ private:
     void renderPointsInBox(const BoundingBox& box, const dwVector3f& position, float lidarHeight);
     void initBoundingBoxRenderBuffer();
     
+    // BEV and heatmap visualization
+    void renderBEVFeatureMap();
+    void renderHeatmap();
+    void convertBEVToImage(const std::vector<float>& bevData, std::vector<uint8_t>& outImage);
+    void convertHeatmapToImage(const std::vector<float>& heatmapData, std::vector<uint8_t>& outImage);
+    
 public:
     ///------------------------------------------------------------------------------
     /// Initialize sample
@@ -438,3 +454,18 @@ public:
 };
 
 #endif // INTER_LIDAR_ICP_HPP
+
+
+
+
+// ./tensorRT_optimization \
+//   --modelType=onnx \
+//   --onnxFile=/usr/local/driveworks-5.20/samples/src/sensors/lidar/lidar_object_detection/pointpillars_deployable_fixed.onnx \
+//   --useDLA \
+//   --half2=1 \
+//   --workspaceSize=2048 \
+//   --verbose=1 \
+//   --out=/usr/local/driveworks-5.20/samples/src/sensors/lidar/lidar_object_detection/pp_dla_fp16.bin
+
+
+
