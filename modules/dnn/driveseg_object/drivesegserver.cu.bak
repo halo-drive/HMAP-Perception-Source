@@ -18,7 +18,7 @@
 #include <queue>              
 #include <condition_variable> 
 #include <set>                
-#include <NvInferPlugin.h>
+
 #include <cuda_runtime.h>
 
 // ---------------- DriveWorks ----------------
@@ -128,35 +128,6 @@ __global__ void colorizeAndBlend_kernel(
 }
 
 // ===============================================================
-// STAGE 2: CUDA PREPROCESSING KERNEL
-// ===============================================================
-
-__global__ void preprocessImageForStage2(
-    float* output,      // [1, 3, H, W] NCHW normalized float32
-    const uint8_t* rgba, // [H, W, 4] uint8 RGBA
-    int W, int H, int pitch,
-    float meanR, float meanG, float meanB,
-    float stdR, float stdG, float stdB)
-{
-    const int x = blockIdx.x * blockDim.x + threadIdx.x;
-    const int y = blockIdx.y * blockDim.y + threadIdx.y;
-    
-    if (x >= W || y >= H) return;
-    
-    const uint8_t* pixel = rgba + y * pitch + x * 4;
-    const int spatialIdx = y * W + x;
-    const int spatialSize = W * H;
-    
-    // Convert RGBA uint8 → RGB float32 normalized (NCHW layout)
-    // output[c, y, x] = output[c * H * W + y * W + x]
-    output[0 * spatialSize + spatialIdx] = ((pixel[0] / 255.0f) - meanR) / stdR; // R
-    output[1 * spatialSize + spatialIdx] = ((pixel[1] / 255.0f) - meanG) / stdG; // G
-    output[2 * spatialSize + spatialIdx] = ((pixel[2] / 255.0f) - meanB) / stdB; // B
-}
-
-
-
-// ===============================================================
 // IPC DATA STRUCTURES
 // ===============================================================
 
@@ -174,22 +145,11 @@ struct FrameHeader {
     uint32_t detCount;
     float avgSegMs;
     float avgDetMs;
-    float avgStage2Ms;
-    uint32_t num3DBoxes;
 };
 
 struct DetectionBox {
     float x, y, width, height;
     char label[64];
-};
-
-struct Detection3DBox {
-    float depth;        // in meters
-    float height;       // in meters
-    float width;        // in meters
-    float length;      // in meters
-    float rotation;     // in radians
-    float iouScore;     // quality score
 };
 #pragma pack(pop)
 
@@ -207,18 +167,11 @@ struct SerializableFrame {
     std::vector<dwRectf> boxes;
     std::vector<std::string> labels;
     
-    //3d detections 
-    std::vector<float> depths;       // [N] depth in meters
-    std::vector<float> dimensions;   // [N*3] h,w,l in meters
-    std::vector<float> rotations;    // [N] rotation in radians
-    std::vector<float> iouScores;    // [N] quality scores
-
     // Stats
     uint32_t segCount;
     uint32_t detCount;
     float avgSegMs;
     float avgDetMs;
-    float avgStage2Ms;
 };
 
 // ===============================================================
@@ -301,13 +254,6 @@ private:
     dwDNNTensorProperties m_detInProps{};
     dwDNNTensorProperties m_detOutProps{};
 
-    //Stage2 Detection DNN  
-    dwDNNHandle_t m_stage2Dnn{DW_NULL_HANDLE};
-    dwDNNTensorProperties m_stage2InPropsImage{};    // images input
-    dwDNNTensorProperties m_stage2InPropsBoxes{};    // boxes_2d input
-    dwDNNTensorProperties m_stage2OutProps[7]{};     // 7 outputs
-
-    static constexpr uint32_t STAGE2_MAX_BOXES = 100;  // Must match ONNX export
     //IPC isolaters 
     std::vector<std::thread> m_sendThreads;
     std::queue<SerializableFrame> m_sendQueue[MAX_CAMS];
@@ -376,32 +322,6 @@ private:
         
         std::chrono::high_resolution_clock::time_point segStartTime;
         std::chrono::high_resolution_clock::time_point detStartTime;
-        
-
-        //stage 2 detection
-        cudaStream_t stage2Stream{nullptr};
-        cudaEvent_t stage2InferDone{nullptr};
-        
-        dwDNNTensorHandle_t stage2InTensorImage{DW_NULL_HANDLE};
-        dwDNNTensorHandle_t stage2InTensorBoxes{DW_NULL_HANDLE};
-        dwDNNTensorHandle_t stage2OutTensorsDev[7]{DW_NULL_HANDLE};
-        
-        dwDNNTensorStreamerHandle_t stage2OutStreamers[7]{DW_NULL_HANDLE};
-        dwDNNTensorHandle_t stage2OutTensorsHost[7]{DW_NULL_HANDLE};
-        
-        bool stage2Running{false};
-        
-        // 3D results
-        std::vector<float> depths;       // [N] depth in meters
-        std::vector<float> dimensions;   // [N*3] h,w,l in meters  
-        std::vector<float> rotations;    // [N] rotation in radians
-        std::vector<float> iouScores;    // [N] quality scores
-        std::mutex stage2Mutex;
-        
-        std::chrono::high_resolution_clock::time_point stage2StartTime;
-        float avgStage2Ms{0.f};
-        uint32_t stage2Count{0};
-    
     } m_dnnCtx[MAX_CAMS];
 
     // IPC Socket Server
@@ -449,13 +369,6 @@ private:
     static bool sort_score(YoloScoreRect box1, YoloScoreRect box2);
     float32_t calculateIouOfBoxes(dwRectf box1, dwRectf box2);
     std::vector<YoloScoreRect> doNmsForYoloOutputBoxes(std::vector<YoloScoreRect>& boxes, float32_t threshold);
-
-    // stage 2 
-    void initStage2DNN();
-    void initPerCameraStage2(uint32_t i);
-    void runStage2Inference(uint32_t i);
-    void collectStage2Results(uint32_t i);
-
 };
 
 // ===============================================================
@@ -484,12 +397,10 @@ bool DriveSeg4CamServer::initialize()
 
     initDNN();
     initDetectionDNN();
-    initStage2DNN();
 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         initPerCameraDNN(i);
         initPerCameraDetection(i);
-        initPerCameraStage2(i);
     }
 
     initSocketServer();
@@ -560,21 +471,10 @@ void DriveSeg4CamServer::release()
         if (c.detOutTensorDev) dwDNNTensor_destroy(c.detOutTensorDev);
         if (c.detOutStreamer) dwDNNTensorStreamer_release(c.detOutStreamer);
         if (c.detConditioner) dwDataConditioner_release(c.detConditioner);
-        if (c.stage2InferDone) cudaEventDestroy(c.stage2InferDone);
-        if (c.stage2Stream) cudaStreamDestroy(c.stage2Stream);
-        if (c.stage2InTensorImage) dwDNNTensor_destroy(c.stage2InTensorImage);
-        if (c.stage2InTensorBoxes) dwDNNTensor_destroy(c.stage2InTensorBoxes);
-        
-        for (uint32_t j = 0; j < 7; ++j) {
-            if (c.stage2OutTensorsDev[j]) dwDNNTensor_destroy(c.stage2OutTensorsDev[j]);
-            if (c.stage2OutStreamers[j]) dwDNNTensorStreamer_release(c.stage2OutStreamers[j]);
-        }
-
     }
 
     if (m_dnn) dwDNN_release(m_dnn);
     if (m_detDnn) dwDNN_release(m_detDnn);
-    if (m_stage2Dnn) dwDNN_release(m_stage2Dnn);
 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         if (m_imgRGBA[i]) dwImage_destroy(m_imgRGBA[i]);
@@ -722,81 +622,6 @@ void DriveSeg4CamServer::initDetectionDNN()
     std::cout << "[DNN] Detection model initialized\n";
 }
 
-void DriveSeg4CamServer::initStage2DNN()
-{
-    // 1. Register TensorRT plugins FIRST
-    if (!initLibNvInferPlugins(nullptr, "")) {
-        throw std::runtime_error("Failed to initialize TensorRT plugins");
-    }
-    std::cout << "[DNN] TensorRT plugins registered\n";
-
-#ifdef VIBRANTE
-    bool useDLA = (m_args.get("cudla") == "1");
-    uint32_t dlaEngine = (uint32_t)std::atoi(m_args.get("dla-engine").c_str());
-#endif
-
-    // 2. Load the model (NO JSON metadata needed - we handle preprocessing manually)
-    std::string stage2Path = m_args.get("stage2_model");
-    if (stage2Path.empty()) {
-        stage2Path = dw_samples::SamplesDataPath::get() + std::string("/samples/detector/");
-        stage2Path += platformPrefix();
-        stage2Path += "/stage2_3d_heads.bin";
-    }
-    
-    std::cout << "[DNN] Loading Stage 2 (3D detection) model: " << stage2Path << "\n";
-
-#ifdef VIBRANTE
-    CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFileWithEngineId(
-        &m_stage2Dnn, stage2Path.c_str(), nullptr,
-        useDLA ? DW_PROCESSOR_TYPE_CUDLA : DW_PROCESSOR_TYPE_GPU,
-        useDLA ? (int32_t)dlaEngine : 0, m_ctx));
-#else
-    CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFile(
-        &m_stage2Dnn, stage2Path.c_str(), nullptr, DW_PROCESSOR_TYPE_GPU, m_ctx));
-#endif
-
-    // 3. Get input/output properties
-    CHECK_DW_ERROR(dwDNN_getInputTensorProperties(&m_stage2InPropsImage, 0, m_stage2Dnn));
-    CHECK_DW_ERROR(dwDNN_getInputTensorProperties(&m_stage2InPropsBoxes, 1, m_stage2Dnn));
-    
-    for (uint32_t i = 0; i < 7; ++i) {
-        CHECK_DW_ERROR(dwDNN_getOutputTensorProperties(&m_stage2OutProps[i], i, m_stage2Dnn));
-    }
-    
-    // 4. Debug: Print tensor shapes
-    std::cout << "\n========== STAGE 2 TENSOR INSPECTION ==========\n";
-    
-    std::cout << "Input 0 (images):\n";
-    std::cout << "  numDimensions: " << m_stage2InPropsImage.numDimensions << "\n";
-    std::cout << "  tensorLayout: " << m_stage2InPropsImage.tensorLayout << "\n";
-    std::cout << "  dataType: " << m_stage2InPropsImage.dataType << "\n";
-    for (uint32_t i = 0; i < m_stage2InPropsImage.numDimensions; ++i) {
-        std::cout << "  dimensionSize[" << i << "]: " << m_stage2InPropsImage.dimensionSize[i] << "\n";
-    }
-    
-    std::cout << "\nInput 1 (boxes_2d):\n";
-    std::cout << "  numDimensions: " << m_stage2InPropsBoxes.numDimensions << "\n";
-    std::cout << "  tensorLayout: " << m_stage2InPropsBoxes.tensorLayout << "\n";
-    std::cout << "  dataType: " << m_stage2InPropsBoxes.dataType << "\n";
-    for (uint32_t i = 0; i < m_stage2InPropsBoxes.numDimensions; ++i) {
-        std::cout << "  dimensionSize[" << i << "]: " << m_stage2InPropsBoxes.dimensionSize[i] << "\n";
-    }
-    
-    for (uint32_t i = 0; i < 7; ++i) {
-        std::cout << "\nOutput " << i << ":\n";
-        std::cout << "  numDimensions: " << m_stage2OutProps[i].numDimensions << "\n";
-        for (uint32_t j = 0; j < m_stage2OutProps[i].numDimensions; ++j) {
-            std::cout << "  dimensionSize[" << j << "]: " << m_stage2OutProps[i].dimensionSize[j] << "\n";
-        }
-    }
-    
-    std::cout << "===============================================\n\n";
-    
-    std::cout << "[DNN] Stage 2 (3D detection) initialized\n";
-    std::cout << "  Max boxes: " << STAGE2_MAX_BOXES << "\n";
-}
-
-
 void DriveSeg4CamServer::initPerCameraDNN(uint32_t i)
 {
     auto &c = m_dnnCtx[i];
@@ -816,7 +641,6 @@ void DriveSeg4CamServer::initPerCameraDNN(uint32_t i)
     hostProps.tensorType = DW_DNN_TENSOR_TYPE_CPU;
     CHECK_DW_ERROR(dwDNNTensorStreamer_initialize(&c.segOutStreamer, &m_outProps, hostProps.tensorType, m_ctx));
 }
-
 
 void DriveSeg4CamServer::initPerCameraDetection(uint32_t i)
 {
@@ -840,42 +664,6 @@ void DriveSeg4CamServer::initPerCameraDetection(uint32_t i)
     c.detBoxes.reserve(100);
     c.detLabels.reserve(100);
 }
-
-
-void DriveSeg4CamServer::initPerCameraStage2(uint32_t i)
-{
-    auto &c = m_dnnCtx[i];
-    
-    cudaStreamCreate(&c.stage2Stream);
-    cudaEventCreate(&c.stage2InferDone);
-    
-    std::cout << "[Stage2 Init Cam " << i << "] Creating tensors...\n";
-    
-    // NO DATA CONDITIONER - we handle preprocessing manually via CUDA kernel
-    // Create input tensors directly
-    CHECK_DW_ERROR(dwDNNTensor_create(&c.stage2InTensorImage, &m_stage2InPropsImage, m_ctx));
-    CHECK_DW_ERROR(dwDNNTensor_create(&c.stage2InTensorBoxes, &m_stage2InPropsBoxes, m_ctx));
-    
-    // Create output tensors (device)
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensor_create(&c.stage2OutTensorsDev[j], &m_stage2OutProps[j], m_ctx));
-        
-        // Create streamers (device → host)
-        dwDNNTensorProperties hostProps = m_stage2OutProps[j];
-        hostProps.tensorType = DW_DNN_TENSOR_TYPE_CPU;
-        CHECK_DW_ERROR(dwDNNTensorStreamer_initialize(
-            &c.stage2OutStreamers[j], &m_stage2OutProps[j], hostProps.tensorType, m_ctx));
-    }
-    
-    // Reserve space for results
-    c.depths.reserve(STAGE2_MAX_BOXES);
-    c.dimensions.reserve(STAGE2_MAX_BOXES * 3);
-    c.rotations.reserve(STAGE2_MAX_BOXES);
-    c.iouScores.reserve(STAGE2_MAX_BOXES);
-    
-    std::cout << "[Stage2] Per-camera context initialized for cam " << i << "\n";
-}
-
 
 void DriveSeg4CamServer::initSocketServer()
 {
@@ -958,8 +746,6 @@ void DriveSeg4CamServer::sendThreadFunc(uint32_t camIndex)
             break;
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-
         auto sendEnd = std::chrono::high_resolution_clock::now();
         float sendMs = std::chrono::duration<float, std::milli>(sendEnd - sendStart).count();
         
@@ -1062,16 +848,6 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
     if (c.detRunning && cudaEventQuery(c.detInferDone) == cudaSuccess) {
         collectDetectionResults(i);
         
-        if (!c.detBoxes.empty() && !c.stage2Running) {
-            c.stage2StartTime = std::chrono::high_resolution_clock::now();
-            try {
-                runStage2Inference(i);
-                c.stage2Running = true;
-            } catch (const std::exception& e) {
-                std::cout << "[Cam" << i << "] Stage 2 inference failed: " << e.what() << "\n";
-            }
-        }
-    
         auto endTime = std::chrono::high_resolution_clock::now();
         float ms = std::chrono::duration<float, std::milli>(endTime - c.detStartTime).count();
         c.avgDetMs = (c.avgDetMs * c.detCount + ms) / (c.detCount + 1);
@@ -1079,21 +855,6 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
         c.detRunning = false;
         c.detCount++;
     }
-
-    if (c.stage2Running && cudaEventQuery(c.stage2InferDone) == cudaSuccess) {
-        collectStage2Results(i);
-        
-        auto endTime = std::chrono::high_resolution_clock::now();
-        float ms = std::chrono::duration<float, std::milli>(endTime - c.stage2StartTime).count();
-        c.avgStage2Ms = (c.avgStage2Ms * c.stage2Count + ms) / (c.stage2Count + 1);
-        
-        c.stage2Running = false;
-        c.stage2Count++;
-        
-        std::cout << "[Cam" << i << "] Stage 2 complete: " 
-                  << c.depths.size() << " 3D predictions in " << ms << "ms\n";
-    }
-
 }
 
 void DriveSeg4CamServer::prepareInput(uint32_t i, dwCameraFrameHandle_t frame)
@@ -1130,81 +891,6 @@ void DriveSeg4CamServer::runDetectionInference(uint32_t i)
     CHECK_DW_ERROR(dwDNNTensorStreamer_producerSend(c.detOutTensorDev, c.detOutStreamer));
     cudaEventRecord(c.detInferDone, c.detStream);
 }
-
-
-void DriveSeg4CamServer::runStage2Inference(uint32_t i)
-{
-    auto &c = m_dnnCtx[i];
-    
-    // ========== 1. PREPARE BOXES_2D TENSOR ==========
-    std::vector<float> boxesData(STAGE2_MAX_BOXES * 5, 0.0f);
-    size_t numActualBoxes = std::min<size_t>(c.detBoxes.size(), STAGE2_MAX_BOXES);
-    
-    for (size_t j = 0; j < numActualBoxes; ++j) {
-        const auto& box = c.detBoxes[j];
-        boxesData[j * 5 + 0] = 0.0f;                    // batch_idx = 0
-        boxesData[j * 5 + 1] = box.x;                   // x1
-        boxesData[j * 5 + 2] = box.y;                   // y1
-        boxesData[j * 5 + 3] = box.x + box.width;       // x2
-        boxesData[j * 5 + 4] = box.y + box.height;      // y2
-    }
-    
-    // Copy boxes to GPU
-    void* boxPtr = nullptr;
-    CHECK_DW_ERROR(dwDNNTensor_lock(&boxPtr, c.stage2InTensorBoxes));
-    cudaMemcpyAsync(boxPtr, boxesData.data(), 
-                    STAGE2_MAX_BOXES * 5 * sizeof(float),
-                    cudaMemcpyHostToDevice, c.stage2Stream);
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2InTensorBoxes));
-    
-    // ========== 2. PREPARE IMAGE TENSOR (MANUAL PREPROCESSING) ==========
-    
-    // Get source RGBA image
-    dwImageCUDA* cudaImg = nullptr;
-    CHECK_DW_ERROR(dwImage_getCUDA(&cudaImg, m_imgRGBA[i]));
-    
-    // Get Stage 2 expected dimensions (NCHW layout)
-    const uint32_t dstW = m_stage2InPropsImage.dimensionSize[0]; // W
-    const uint32_t dstH = m_stage2InPropsImage.dimensionSize[1]; // H
-    const uint32_t dstC = m_stage2InPropsImage.dimensionSize[2]; // C (should be 3)
-    
-    std::cout << "[Stage2 Cam " << i << "] Preprocessing image: "
-              << cudaImg->prop.width << "x" << cudaImg->prop.height 
-              << " → " << dstW << "x" << dstH << "\n";
-    
-    // Lock output tensor
-    void* imagePtr = nullptr;
-    CHECK_DW_ERROR(dwDNNTensor_lock(&imagePtr, c.stage2InTensorImage));
-    
-    // Run preprocessing kernel: RGBA uint8 → RGB float32 normalized
-    dim3 block(16, 16);
-    dim3 grid((dstW + 15) / 16, (dstH + 15) / 16);
-    
-    preprocessImageForStage2<<<grid, block, 0, c.stage2Stream>>>(
-        reinterpret_cast<float*>(imagePtr),              // Output: [1, 3, H, W] float32
-        reinterpret_cast<uint8_t*>(cudaImg->dptr[0]),    // Input: RGBA uint8
-        dstW, dstH, cudaImg->pitch[0],
-        0.485f, 0.456f, 0.406f,  // ImageNet means (R, G, B)
-        0.229f, 0.224f, 0.225f   // ImageNet stds (R, G, B)
-    );
-    
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2InTensorImage));
-    
-    // ========== 3. RUN INFERENCE ==========
-    CHECK_DW_ERROR(dwDNN_setCUDAStream(c.stage2Stream, m_stage2Dnn));
-    
-    dwConstDNNTensorHandle_t inputs[2] = {c.stage2InTensorImage, c.stage2InTensorBoxes};
-    CHECK_DW_ERROR(dwDNN_infer(c.stage2OutTensorsDev, 7, inputs, 2, m_stage2Dnn));
-    
-    // ========== 4. STREAM OUTPUTS TO HOST ==========
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensorStreamer_producerSend(
-            c.stage2OutTensorsDev[j], c.stage2OutStreamers[j]));
-    }
-    
-    cudaEventRecord(c.stage2InferDone, c.stage2Stream);
-}
-
 
 void DriveSeg4CamServer::collectAndOverlay(uint32_t i)
 {
@@ -1351,109 +1037,9 @@ void DriveSeg4CamServer::collectDetectionResults(uint32_t i)
     CHECK_DW_ERROR(dwDNNTensorStreamer_producerReturn(nullptr, 1000, c.detOutStreamer));
 }
 
-
-
-
-void DriveSeg4CamServer::collectStage2Results(uint32_t i)
-{
-    auto &c = m_dnnCtx[i];
-    
-    // Receive all outputs
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensorStreamer_consumerReceive(
-            &c.stage2OutTensorsHost[j], 1000, c.stage2OutStreamers[j]));
-    }
-    
-    // Lock output tensors
-    void* depthPtr = nullptr;
-    void* dimsPtr = nullptr;
-    void* rotBinsPtr = nullptr;
-    void* rotResPtr = nullptr;
-    void* iouPtr = nullptr;
-    
-    CHECK_DW_ERROR(dwDNNTensor_lock(&depthPtr, c.stage2OutTensorsHost[0]));      // depth
-    CHECK_DW_ERROR(dwDNNTensor_lock(&dimsPtr, c.stage2OutTensorsHost[1]));       // dimensions
-    CHECK_DW_ERROR(dwDNNTensor_lock(&rotBinsPtr, c.stage2OutTensorsHost[3]));    // rotation_bins
-    CHECK_DW_ERROR(dwDNNTensor_lock(&rotResPtr, c.stage2OutTensorsHost[4]));     // rotation_res
-    CHECK_DW_ERROR(dwDNNTensor_lock(&iouPtr, c.stage2OutTensorsHost[5]));        // iou [100, 1] ← NOW 2D!
-    
-    float* depthData = reinterpret_cast<float*>(depthPtr);
-    float* dimsData = reinterpret_cast<float*>(dimsPtr);
-    float* rotBinsData = reinterpret_cast<float*>(rotBinsPtr);
-    float* rotResData = reinterpret_cast<float*>(rotResPtr);
-    float* iouData = reinterpret_cast<float*>(iouPtr);
-    
-    std::lock_guard<std::mutex> lock(c.stage2Mutex);
-    c.depths.clear();
-    c.dimensions.clear();
-    c.rotations.clear();
-    c.iouScores.clear();
-    
-    // Process only actual detections (not padded zeros)
-    size_t numActualBoxes = std::min<size_t>(c.detBoxes.size(), STAGE2_MAX_BOXES);
-    
-    for (size_t n = 0; n < numActualBoxes; ++n) {
-        // Extract depth (first value of [depth, log_var, offset])
-        float depth = depthData[n * 3];
-        
-        // Skip if invalid (all zeros or negative)
-        if (depth <= 0.01f) {
-            c.depths.push_back(0.0f);
-            c.dimensions.push_back(0.0f);
-            c.dimensions.push_back(0.0f);
-            c.dimensions.push_back(0.0f);
-            c.rotations.push_back(0.0f);
-            c.iouScores.push_back(0.0f);
-            continue;
-        }
-        
-        c.depths.push_back(depth);
-        
-        // Extract dimensions [h, w, l]
-        c.dimensions.push_back(dimsData[n * 3 + 0]);  // height
-        c.dimensions.push_back(dimsData[n * 3 + 1]);  // width
-        c.dimensions.push_back(dimsData[n * 3 + 2]);  // length
-        
-        // Decode rotation from bins + residuals
-        float maxVal = rotBinsData[n * 12];
-        int maxBin = 0;
-        for (int b = 1; b < 12; ++b) {
-            if (rotBinsData[n * 12 + b] > maxVal) {
-                maxVal = rotBinsData[n * 12 + b];
-                maxBin = b;
-            }
-        }
-        
-        const float binSize = 2.0f * M_PI / 12.0f;
-        float binCenter = (maxBin + 0.5f) * binSize - M_PI;
-        float residual = rotResData[n * 12 + maxBin];
-        float rotation = binCenter + residual;
-        c.rotations.push_back(rotation);
-        
-        // iouData is now laid out as [iou0, iou1, iou2, ...] with stride 1
-        c.iouScores.push_back(iouData[n * 1 + 0]);  // or simply: iouData[n]
-    }
-    
-    // Unlock tensors
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[0]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[1]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[3]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[4]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[5]));
-    
-    // Return tensors
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensorStreamer_consumerReturn(
-            &c.stage2OutTensorsHost[j], c.stage2OutStreamers[j]));
-        CHECK_DW_ERROR(dwDNNTensorStreamer_producerReturn(nullptr, 1000, c.stage2OutStreamers[j]));
-    }
-}
-
-
 // ===============================================================
 // FRAME EXTRACTION & IPC TRANSMISSION
 // ===============================================================
-
 
 
 SerializableFrame DriveSeg4CamServer::extractFrameData(uint32_t i)
@@ -1461,32 +1047,35 @@ SerializableFrame DriveSeg4CamServer::extractFrameData(uint32_t i)
     SerializableFrame frame;
     frame.cameraIndex = i;
     
-    // Extract source image (existing code - unchanged)
+    // Extract source image
     dwImageCUDA* cudaImg = nullptr;
     CHECK_DW_ERROR(dwImage_getCUDA(&cudaImg, m_imgRGBA[i]));
     
     const uint32_t srcWidth = cudaImg->prop.width;
     const uint32_t srcHeight = cudaImg->prop.height;
+    
     const uint32_t dstWidth = 640;
     const uint32_t dstHeight = 640;
     
     frame.width = dstWidth;
     frame.height = dstHeight;
-    frame.stride = dstWidth * 4;
+    frame.stride = dstWidth * 4;  // RGBA
     
     const size_t dstImageBytes = dstWidth * dstHeight * 4;
     frame.rgbaPixels.resize(dstImageBytes);
     
-    // Downscale image (existing code - unchanged)
+    // Create temporary device buffer for downscaled image
     uint8_t* d_downscaled = nullptr;
     cudaMalloc(&d_downscaled, dstImageBytes);
     
+    // Simple CUDA bilinear downscale
     const float scaleX = (float)srcWidth / dstWidth;
     const float scaleY = (float)srcHeight / dstHeight;
     
     dim3 block(16, 16);
     dim3 grid((dstWidth + 15) / 16, (dstHeight + 15) / 16);
     
+    // Launch downscale kernel (defined below)
     downscaleKernel<<<grid, block>>>(
         d_downscaled,
         reinterpret_cast<uint8_t*>(cudaImg->dptr[0]),
@@ -1497,10 +1086,12 @@ SerializableFrame DriveSeg4CamServer::extractFrameData(uint32_t i)
     );
     
     cudaDeviceSynchronize();
+    
+    // Copy downscaled image to CPU
     cudaMemcpy(frame.rgbaPixels.data(), d_downscaled, dstImageBytes, cudaMemcpyDeviceToHost);
     cudaFree(d_downscaled);
     
-    // Extract 2D detection data (existing code - unchanged)
+    // Extract detection data (scale coordinates)
     auto &c = m_dnnCtx[i];
     {
         std::lock_guard<std::mutex> lock(c.detMutex);
@@ -1520,22 +1111,16 @@ SerializableFrame DriveSeg4CamServer::extractFrameData(uint32_t i)
         }
     }
     
-    // Extract 3D predictions
-    {
-        std::lock_guard<std::mutex> lock(c.stage2Mutex);
-        frame.depths = c.depths;
-        frame.dimensions = c.dimensions;
-        frame.rotations = c.rotations;
-        frame.iouScores = c.iouScores;
-    }
-    
     // Extract stats
     frame.segCount = c.segCount;
     frame.detCount = c.detCount;
     frame.avgSegMs = c.avgSegMs;
     frame.avgDetMs = c.avgDetMs;
-    frame.avgStage2Ms = c.avgStage2Ms;  
     frame.frameId = c.frameId;
+    
+    std::cout << "[Extract] Cam " << i << " | Downscaled " << srcWidth << "x" << srcHeight 
+              << " → " << dstWidth << "x" << dstHeight 
+              << " | Size: " << dstImageBytes << " bytes\n";
     
     return frame;
 }
@@ -1564,9 +1149,7 @@ bool DriveSeg4CamServer::sendFrameToClients(const SerializableFrame& frame)
     header.detCount = frame.detCount;
     header.avgSegMs = frame.avgSegMs;
     header.avgDetMs = frame.avgDetMs;
-    header.avgStage2Ms = frame.avgStage2Ms; 
-    header.num3DBoxes = frame.depths.size();
-
+    
     std::cout << "[IPC] Sending frame " << frame.frameId << " to cam " << frame.cameraIndex 
               << " | Size: " << frame.rgbaPixels.size() << " bytes | Boxes: " << frame.boxes.size() << "\n";
     
@@ -1635,23 +1218,6 @@ bool DriveSeg4CamServer::sendFrameToClients(const SerializableFrame& frame)
         }
     }
     
-    for (size_t i = 0; i < frame.depths.size(); ++i) {
-        Detection3DBox det3d{};
-        det3d.depth = frame.depths[i];
-        det3d.height = frame.dimensions[i * 3 + 0];
-        det3d.width = frame.dimensions[i * 3 + 1];
-        det3d.length = frame.dimensions[i * 3 + 2];
-        det3d.rotation = frame.rotations[i];
-        det3d.iouScore = frame.iouScores[i];
-        
-        size_t det3dSize = sizeof(Detection3DBox);
-        status = dwSocketConnection_write(
-            reinterpret_cast<uint8_t*>(&det3d), &det3dSize,
-            30000, m_connections[frame.cameraIndex]);
-        
-        if (status != DW_SUCCESS) return false;
-    }
-
     std::cout << "[IPC] Frame " << frame.frameId << " transmitted successfully\n";
     return true;
 }
@@ -1683,7 +1249,6 @@ void DriveSeg4CamServer::printStats()
         std::cout << "  Cam" << i 
                   << " | Det: " << c.detCount << " (" << c.avgDetMs << "ms)"
                   << " | Seg: " << c.segCount << " (" << c.avgSegMs << "ms)"
-                  << " | 3D: " << c.stage2Count << " (" << c.avgStage2Ms << "ms)"
                   << " | Boxes: " << c.detBoxes.size() << "\n";
     }
 }
@@ -1756,11 +1321,6 @@ int main(int argc, const char** argv)
             "port",
             "49252",
             "Socket server port"
-        ),
-        ProgramArguments::Option_t(
-            "stage2_model",
-            "",
-            "Path to Stage 2 (3D detection) TensorRT engine"
         ),
 #ifdef VIBRANTE
         ProgramArguments::Option_t("cudla", "0", "Run DNN on CuDLA (1=yes)"),
