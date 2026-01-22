@@ -1053,52 +1053,7 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
 {
     auto &c = m_dnnCtx[i];
     
-    // Check segmentation
-    if (c.segRunning && cudaEventQuery(c.segInferDone) == cudaSuccess) {
-        collectAndOverlay(i);  // ← Image now has segmentation overlay
-        
-        auto endTime = std::chrono::high_resolution_clock::now();
-        float ms = std::chrono::duration<float, std::milli>(endTime - c.segStartTime).count();
-        c.avgSegMs = (c.avgSegMs * c.segCount + ms) / (c.segCount + 1);
-        
-        c.segRunning = false;
-        c.segCount++;
-        m_recentInferences++;
-        
-        
-        SerializableFrame frameData = extractFrameData(i);
-        {
-            std::lock_guard<std::mutex> lock(m_sendMutex[i]);
-            if (m_sendQueue[i].size() < 2) {
-                m_sendQueue[i].push(std::move(frameData));
-                m_sendCV[i].notify_one();
-            }
-        }
-    }
-    
-    // Check 2D detection 
-    if (c.detRunning && cudaEventQuery(c.detInferDone) == cudaSuccess) {
-        collectDetectionResults(i);
-        
-        if (!c.detBoxes.empty() && !c.stage2Running) {
-            c.stage2StartTime = std::chrono::high_resolution_clock::now();
-            try {
-                runStage2Inference(i);
-                c.stage2Running = true;
-            } catch (const std::exception& e) {
-                std::cout << "[Cam" << i << "] Stage 2 inference failed: " << e.what() << "\n";
-            }
-        }
-    
-        auto endTime = std::chrono::high_resolution_clock::now();
-        float ms = std::chrono::duration<float, std::milli>(endTime - c.detStartTime).count();
-        c.avgDetMs = (c.avgDetMs * c.detCount + ms) / (c.detCount + 1);
-        
-        c.detRunning = false;
-        c.detCount++;
-    }
-
-    //check stage 2 completion
+    // Check Stage 2 completion FIRST (before starting new one)
     if (c.stage2Running && cudaEventQuery(c.stage2InferDone) == cudaSuccess) {
         collectStage2Results(i);
         
@@ -1112,7 +1067,51 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
         std::cout << "[Cam" << i << "] Stage 2 complete: " 
                   << c.depths.size() << " 3D predictions in " << ms << "ms\n";
     }
-
+    
+    // Check segmentation
+    if (c.segRunning && cudaEventQuery(c.segInferDone) == cudaSuccess) {
+        collectAndOverlay(i);
+        
+        auto endTime = std::chrono::high_resolution_clock::now();
+        float ms = std::chrono::duration<float, std::milli>(endTime - c.segStartTime).count();
+        c.avgSegMs = (c.avgSegMs * c.segCount + ms) / (c.segCount + 1);
+        
+        c.segRunning = false;
+        c.segCount++;
+        m_recentInferences++;
+        
+        SerializableFrame frameData = extractFrameData(i);
+        {
+            std::lock_guard<std::mutex> lock(m_sendMutex[i]);
+            if (m_sendQueue[i].size() < 2) {
+                m_sendQueue[i].push(std::move(frameData));
+                m_sendCV[i].notify_one();
+            }
+        }
+    }
+    
+    // Check 2D detection - only start Stage 2 if NOT already running
+    if (c.detRunning && cudaEventQuery(c.detInferDone) == cudaSuccess) {
+        collectDetectionResults(i);
+        
+        auto endTime = std::chrono::high_resolution_clock::now();
+        float ms = std::chrono::duration<float, std::milli>(endTime - c.detStartTime).count();
+        c.avgDetMs = (c.avgDetMs * c.detCount + ms) / (c.detCount + 1);
+        
+        c.detRunning = false;
+        c.detCount++;
+        
+        // Only start Stage 2 if we have boxes AND Stage 2 is not already running
+        if (!c.detBoxes.empty() && !c.stage2Running) {
+            c.stage2StartTime = std::chrono::high_resolution_clock::now();
+            try {
+                runStage2Inference(i);
+                c.stage2Running = true;
+            } catch (const std::exception& e) {
+                std::cout << "[Cam" << i << "] Stage 2 inference failed: " << e.what() << "\n";
+            }
+        }
+    }
 }
 
 void DriveSeg4CamServer::prepareInput(uint32_t i, dwCameraFrameHandle_t frame)
