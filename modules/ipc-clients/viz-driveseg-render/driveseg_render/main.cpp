@@ -67,34 +67,48 @@ struct FrameHeader {
     uint32_t detCount;
     float avgSegMs;
     float avgDetMs;
+    float avgStage2Ms;
+    uint32_t num3DBoxes;      
 };
 
 struct DetectionBox {
     float x, y, width, height;
     char label[64];
 };
+
+struct Detection3DBox {
+    float depth;        // in meters
+    float height;       // in meters
+    float width;        // in meters
+    float length;       // in meters
+    float rotation;     // in radians
+    float iouScore;     // quality score
+};
 #pragma pack(pop)
 
 struct ReceivedFrame {
     uint32_t cameraIndex;
     uint64_t frameId;
-
+    
     // Image
     uint32_t width;
     uint32_t height;
     uint32_t stride;
     std::vector<uint8_t> rgbaPixels;
-
+    
     // Detections
     std::vector<dwRectf> boxes;
     std::vector<std::string> labels;
+    
+    std::vector<Detection3DBox> boxes3D;
 
     // Stats
     uint32_t segCount;
     uint32_t detCount;
     float avgSegMs;
     float avgDetMs;
-
+    float avgStage2Ms;
+    
     bool valid{false};
 };
 
@@ -164,6 +178,11 @@ private:
 
     // Utilities
     void printStats();
+
+    struct CameraIntrinsics {
+        float fx, fy, cx, cy;
+    };CameraIntrinsics m_intrinsics;
+    void initIntrinsics();
 };
 
 // ===============================================================
@@ -178,6 +197,35 @@ DriveSeg4CamClient::DriveSeg4CamClient(const ProgramArguments& args)
     m_numCameras = static_cast<uint32_t>(std::stoul(args.get("num-cameras")));
 }
 
+void DriveSeg4CamClient::initIntrinsics()
+    {
+        // Rectified camera intrinsics from calibration (3848x2168)
+        // Scaled to transmitted resolution (640x640)
+        const float origW = 3848.0f;
+        const float origH = 2168.0f;
+        const float transW = 640.0f;
+        const float transH = 640.0f;
+        
+        const float scaleX = transW / origW;
+        const float scaleY = transH / origH;
+        
+        // Original rectified intrinsics
+        const float fx_orig = 1655.2066956340523f;
+        const float fy_orig = 1656.334760722568f;
+        const float cx_orig = 1819.2548585234283f;
+        const float cy_orig = 1019.9403399106654f;
+        
+        // Scale to 640x640
+        m_intrinsics.fx = fx_orig * scaleX;  // ~275.3
+        m_intrinsics.fy = fy_orig * scaleY;  // ~489.0
+        m_intrinsics.cx = cx_orig * scaleX;  // ~302.5
+        m_intrinsics.cy = cy_orig * scaleY;  // ~301.1
+        
+        std::cout << "[Intrinsics] Scaled to " << transW << "x" << transH << ":\n";
+        std::cout << "  fx=" << m_intrinsics.fx << ", fy=" << m_intrinsics.fy << "\n";
+        std::cout << "  cx=" << m_intrinsics.cx << ", cy=" << m_intrinsics.cy << "\n";
+    }
+
 bool DriveSeg4CamClient::onInitialize()
 {
     std::cout << "[Client] Initializing...\n";
@@ -185,6 +233,7 @@ bool DriveSeg4CamClient::onInitialize()
     initDW();
     initRenderer();
     initImages();
+    initIntrinsics();
     initSocketClient();
 
 
@@ -304,11 +353,11 @@ void DriveSeg4CamClient::initImages()
 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         CHECK_DW_ERROR(dwImage_create(&m_imgCUDA[i], cudaProps, m_ctx));
-
+        
         // Initialize CUDA→GL streamer (same as original)
         CHECK_DW_ERROR(dwImageStreamerGL_initialize(&m_streamerToGL[i], &cudaProps, DW_IMAGE_GL, m_ctx));
     }
-
+    
     std::cout << "[Client] CUDA images initialized\n";
 }
 
@@ -319,20 +368,20 @@ void DriveSeg4CamClient::initSocketClient()
 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         uint16_t port = m_serverPort + i;
-
+        
         CHECK_DW_ERROR(dwSocketClient_initialize(&m_socketClients[i], 1, m_ctx));
-
+        
         std::cout << "[IPC] Connecting camera " << i << " to port " << port << "...\n";
-
+        
         dwStatus status = DW_TIME_OUT;
         int attempts = 0;
-
+        
         while (status == DW_TIME_OUT && attempts < 30) {
-            status = dwSocketClient_connect(&m_connections[i], m_serverIP.c_str(),
+            status = dwSocketClient_connect(&m_connections[i], m_serverIP.c_str(), 
                                            port, 1000, m_socketClients[i]);
             attempts++;
         }
-
+        
         if (status == DW_SUCCESS) {
             std::cout << "[IPC] Camera " << i << " connected to port " << port << "\n";
         } else {
@@ -363,6 +412,7 @@ void DriveSeg4CamClient::receiveThreadFunc(uint32_t camIndex)
 }
 
 
+
 bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
 {
     if (!m_connections[camIndex]) return false;
@@ -372,24 +422,24 @@ bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
     // ========================================
     FrameHeader header{};
     size_t peekSize = sizeof(FrameHeader);
-
+    
     dwStatus status = dwSocketConnection_peek(
         reinterpret_cast<uint8_t*>(&header),
         &peekSize,
-        5000,  // 5 second timeout
+        5000,
         m_connections[camIndex]
     );
 
     if (status != DW_SUCCESS) {
         if (status != DW_TIME_OUT) {
-            std::cout << "[Client] Peek header failed for cam " << camIndex
+            std::cout << "[Client] Peek header failed for cam " << camIndex 
                       << ": " << dwGetStatusName(status) << "\n";
         }
         return false;
     }
 
     if (peekSize != sizeof(FrameHeader)) {
-        std::cout << "[Client] Incomplete header peek for cam " << camIndex
+        std::cout << "[Client] Incomplete header peek for cam " << camIndex 
                   << " (got " << peekSize << " bytes)\n";
         return false;
     }
@@ -398,18 +448,17 @@ bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
     // STEP 2: Check if header is valid
     // ========================================
     if (header.magic != 0xDEADBEEF) {
-        std::cout << "[Client] Invalid magic during peek for cam " << camIndex
+        std::cout << "[Client] Invalid magic during peek for cam " << camIndex 
                   << " (got 0x" << std::hex << header.magic << std::dec << ")\n";
-
-        // Try to resync: read and discard 1 byte at a time until we find magic
+        
+        // Try to resync
         std::cout << "[Client] Attempting resync for cam " << camIndex << "...\n";
-
+        
         for (int attempts = 0; attempts < 1000; ++attempts) {
             uint8_t discard;
             size_t discardSize = 1;
             dwSocketConnection_read(&discard, &discardSize, 1000, m_connections[camIndex]);
-
-            // Peek again
+            
             peekSize = sizeof(FrameHeader);
             status = dwSocketConnection_peek(
                 reinterpret_cast<uint8_t*>(&header),
@@ -417,15 +466,14 @@ bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
                 1000,
                 m_connections[camIndex]
             );
-
+            
             if (status == DW_SUCCESS && peekSize == sizeof(FrameHeader) && header.magic == 0xDEADBEEF) {
-                std::cout << "[Client] Resync successful for cam " << camIndex
+                std::cout << "[Client] Resync successful for cam " << camIndex 
                           << " after " << attempts << " bytes\n";
                 break;
             }
         }
-
-        // Try one more time
+        
         if (header.magic != 0xDEADBEEF) {
             std::cout << "[Client] Resync failed for cam " << camIndex << "\n";
             return false;
@@ -448,8 +496,10 @@ bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
         return false;
     }
 
-    std::cout << "[Client] Cam " << camIndex << " frame " << header.frameId
-              << " | Image: " << header.imageDataSize << " bytes\n";
+    std::cout << "[Client] Cam " << camIndex << " frame " << header.frameId 
+              << " | Image: " << header.imageDataSize << " bytes"
+              << " | 2D: " << header.numBoxes 
+              << " | 3D: " << header.num3DBoxes << "\n";
 
     // Populate frame metadata
     frame.cameraIndex = header.cameraIndex;
@@ -461,64 +511,60 @@ bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
     frame.detCount = header.detCount;
     frame.avgSegMs = header.avgSegMs;
     frame.avgDetMs = header.avgDetMs;
+    frame.avgStage2Ms = header.avgStage2Ms;  // 
 
     // ========================================
-    // STEP 4: Receive image data with retry
+    // STEP 4: Receive image data
     // ========================================
     frame.rgbaPixels.resize(header.imageDataSize);
     size_t totalReceived = 0;
     uint8_t* dataPtr = frame.rgbaPixels.data();
-
+    
     int maxRetries = 5;
     int retryCount = 0;
-
+    
     while (totalReceived < header.imageDataSize && retryCount < maxRetries) {
         size_t remaining = header.imageDataSize - totalReceived;
-        size_t toRead = remaining;  // Try to read all remaining
-        size_t bytesRead = toRead;
-
+        size_t bytesRead = remaining;
+        
         status = dwSocketConnection_read(
             dataPtr + totalReceived,
             &bytesRead,
-            20000,  // 20 second timeout for large transfers
+            20000,
             m_connections[camIndex]
         );
-
+        
         if (status == DW_SUCCESS) {
             totalReceived += bytesRead;
-            retryCount = 0;  // Reset retry counter on success
-
+            retryCount = 0;
+            
             if (bytesRead == 0) {
                 std::cout << "[Client] Cam " << camIndex << " connection closed\n";
                 return false;
             }
         } else if (status == DW_TIME_OUT) {
             retryCount++;
-            std::cout << "[Client] Cam " << camIndex << " image read timeout (attempt "
-                      << retryCount << "/" << maxRetries << ")"
-                      << " | Received: " << totalReceived << "/" << header.imageDataSize << "\n";
-
+            std::cout << "[Client] Cam " << camIndex << " image read timeout (attempt " 
+                      << retryCount << "/" << maxRetries << ")\n";
+            
             if (retryCount >= maxRetries) {
-                std::cout << "[Client] Cam " << camIndex << " failed after " << maxRetries
-                          << " retries | Aborting frame\n";
+                std::cout << "[Client] Cam " << camIndex << " failed after retries\n";
                 return false;
             }
-            // Continue loop to retry
         } else {
-            std::cout << "[Client] Cam " << camIndex << " image read failed: "
+            std::cout << "[Client] Cam " << camIndex << " image read failed: " 
                       << dwGetStatusName(status) << "\n";
             return false;
         }
     }
-
+    
     if (totalReceived != header.imageDataSize) {
-        std::cout << "[Client] Cam " << camIndex << " incomplete image: "
-                  << totalReceived << "/" << header.imageDataSize << " bytes\n";
+        std::cout << "[Client] Cam " << camIndex << " incomplete image\n";
         return false;
     }
 
     // ========================================
-    // STEP 5: Receive detection boxes
+    // STEP 5: Receive 2D detection boxes
     // ========================================
     frame.boxes.clear();
     frame.labels.clear();
@@ -536,13 +582,37 @@ bool DriveSeg4CamClient::receiveFrame(uint32_t camIndex, ReceivedFrame& frame)
         );
 
         if (status != DW_SUCCESS || boxSize != sizeof(DetectionBox)) {
-            std::cout << "[Client] Failed to receive box " << i << " for cam " << camIndex << "\n";
+            std::cout << "[Client] Failed to receive 2D box " << i << " for cam " << camIndex << "\n";
             return false;
         }
 
         dwRectf rectf{box.x, box.y, box.width, box.height};
         frame.boxes.push_back(rectf);
         frame.labels.push_back(std::string(box.label));
+    }
+
+    // ========================================
+    //  STEP 6: Receive 3D detection boxes (NEW!)
+    // ========================================
+    frame.boxes3D.clear();
+    frame.boxes3D.reserve(header.num3DBoxes);
+
+    for (uint32_t i = 0; i < header.num3DBoxes; ++i) {
+        Detection3DBox box3D{};
+        size_t box3DSize = sizeof(Detection3DBox);
+        status = dwSocketConnection_read(
+            reinterpret_cast<uint8_t*>(&box3D),
+            &box3DSize,
+            5000,
+            m_connections[camIndex]
+        );
+
+        if (status != DW_SUCCESS || box3DSize != sizeof(Detection3DBox)) {
+            std::cout << "[Client] Failed to receive 3D box " << i << " for cam " << camIndex << "\n";
+            return false;
+        }
+
+        frame.boxes3D.push_back(box3D);
     }
 
     frame.valid = true;
@@ -571,9 +641,9 @@ void DriveSeg4CamClient::renderCamera(uint32_t i)
 
     // Check if we need to resize the image
     if (cudaImg->prop.width != frame.width || cudaImg->prop.height != frame.height) {
-        std::cout << "[Client] Resizing camera " << i << " to "
+        std::cout << "[Client] Resizing camera " << i << " to " 
                   << frame.width << "x" << frame.height << "\n";
-
+        
         // Recreate image with correct dimensions
         dwImageStreamerGL_release(m_streamerToGL[i]);
         dwImage_destroy(m_imgCUDA[i]);
@@ -604,10 +674,10 @@ void DriveSeg4CamClient::renderCamera(uint32_t i)
 
     // Stream CUDA image to GL (same as original)
     CHECK_DW_ERROR(dwImageStreamerGL_producerSend(m_imgCUDA[i], m_streamerToGL[i]));
-
+    
     dwImageHandle_t frameGL{};
     CHECK_DW_ERROR(dwImageStreamerGL_consumerReceive(&frameGL, 33000, m_streamerToGL[i]));
-
+    
     dwImageGL* imageGL{};
     CHECK_DW_ERROR(dwImage_getGL(&imageGL, frameGL));
 
@@ -624,8 +694,8 @@ void DriveSeg4CamClient::renderCamera(uint32_t i)
     CHECK_DW_ERROR(dwRenderEngine_setColor({1, 1, 1, 1}, m_re));
     char buf[256];
     std::snprintf(buf, sizeof(buf), "Cam %u | Frame:%lu Det:%u(%.1fms) Seg:%u(%.1fms) Boxes:%zu",
-                  i, frame.frameId, frame.detCount, frame.avgDetMs,
-                  frame.segCount, frame.avgSegMs, frame.boxes.size());
+                  i, frame.frameId, frame.detCount, frame.avgDetMs, 
+                  frame.segCount, frame.avgSegMs, frame.boxes.size(), frame.avgStage2Ms, frame.boxes.size());
     CHECK_DW_ERROR(dwRenderEngine_renderText2D(buf, {16, 28}, m_re));
 
     // Return GL image (same as original)
@@ -633,25 +703,189 @@ void DriveSeg4CamClient::renderCamera(uint32_t i)
     CHECK_DW_ERROR(dwImageStreamerGL_producerReturn(nullptr, 32000, m_streamerToGL[i]));
 }
 
+
+
 void DriveSeg4CamClient::renderDetectionBoxes(uint32_t i, const ReceivedFrame& frame)
 {
     if (frame.boxes.empty()) return;
 
-    // Render boxes (red)
-    CHECK_DW_ERROR(dwRenderEngine_setColor({1.0f, 0.0f, 0.0f, 1.0f}, m_re));
+    const float fx = m_intrinsics.fx;
+    const float fy = m_intrinsics.fy;
+    const float cx = m_intrinsics.cx;
+    const float cy = m_intrinsics.cy;
+
+    // ========================================
+    // Render 2D boxes (red)
+    // ========================================
+    CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_re));
     CHECK_DW_ERROR(dwRenderEngine_setLineWidth(2.0f, m_re));
     CHECK_DW_ERROR(dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_BOXES_2D,
                                          frame.boxes.data(), sizeof(dwRectf), 0,
                                          frame.boxes.size(), m_re));
 
-    // Render labels (white text)
-    CHECK_DW_ERROR(dwRenderEngine_setColor({1.0f, 1.0f, 1.0f, 1.0f}, m_re));
-    CHECK_DW_ERROR(dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_12, m_re));
+    // ========================================
+    // Render 2D labels
+    // ========================================
+    CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_WHITE, m_re));
+    CHECK_DW_ERROR(dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_8, m_re));
     for (size_t j = 0; j < frame.labels.size(); ++j) {
-        dwVector2f labelPos = {frame.boxes[j].x + 2, frame.boxes[j].y - 5};
+        dwVector2f labelPos = {frame.boxes[j].x + 2, frame.boxes[j].y - 2};
         CHECK_DW_ERROR(dwRenderEngine_renderText2D(frame.labels[j].c_str(), labelPos, m_re));
     }
+
+    // ========================================
+    // Render 3D boxes with camera projection
+    // ========================================
+    if (!frame.boxes3D.empty()) {
+        size_t num3D = std::min(frame.boxes.size(), frame.boxes3D.size());
+        
+        for (size_t j = 0; j < num3D; ++j) {
+            const auto& box3D = frame.boxes3D[j];
+            const auto& box2D = frame.boxes[j];
+            
+            // Skip invalid detections
+            if (box3D.depth <= 0.1f || box3D.depth > 150.0f) continue;
+            
+            // ========================================
+            // Reconstruct 3D position from 2D box + depth
+            // Use bottom-center of 2D box as reference
+            // ========================================
+            float x_2d = box2D.x + box2D.width / 2.0f;
+            float y_2d = box2D.y + box2D.height;  // Bottom edge
+            float z = box3D.depth;
+            
+            // Unproject to camera coordinates
+            float x_cam = (x_2d - cx) * z / fx;
+            float y_cam_bottom = (y_2d - cy) * z / fy;
+            
+            // Shift to geometric center
+            float y_cam = y_cam_bottom - box3D.height / 2.0f;
+            float z_cam = z;
+            
+            float h = box3D.height;
+            float w = box3D.width;
+            float l = box3D.length;
+            float ry = box3D.rotation;
+            
+            // ========================================
+            // 8 corners in object frame (KITTI convention)
+            // Y is down in camera frame
+            // ========================================
+            float half_l = l / 2.0f;
+            float half_w = w / 2.0f;
+            float half_h = h / 2.0f;
+            
+            // Corners: [x, y, z] in object frame
+            // Bottom = +y, Top = -y (camera Y points down)
+            float corners_obj[8][3] = {
+                {-half_l,  half_h, -half_w},  // 0: back-left-bottom
+                { half_l,  half_h, -half_w},  // 1: back-right-bottom
+                { half_l,  half_h,  half_w},  // 2: front-right-bottom
+                {-half_l,  half_h,  half_w},  // 3: front-left-bottom
+                {-half_l, -half_h, -half_w},  // 4: back-left-top
+                { half_l, -half_h, -half_w},  // 5: back-right-top
+                { half_l, -half_h,  half_w},  // 6: front-right-top
+                {-half_l, -half_h,  half_w},  // 7: front-left-top
+            };
+            
+            // ========================================
+            // Rotate around Y and translate to camera frame
+            // ========================================
+            float cos_ry = std::cos(ry);
+            float sin_ry = std::sin(ry);
+            
+            dwVector2f corners_2d[8];
+            bool valid = true;
+            
+            for (int c = 0; c < 8; ++c) {
+                // Rotate around Y axis
+                float x_rot =  corners_obj[c][0] * cos_ry + corners_obj[c][2] * sin_ry;
+                float y_rot =  corners_obj[c][1];
+                float z_rot = -corners_obj[c][0] * sin_ry + corners_obj[c][2] * cos_ry;
+                
+                // Translate to camera frame
+                float x_c = x_rot + x_cam;
+                float y_c = y_rot + y_cam;
+                float z_c = z_rot + z_cam;
+                
+                // Behind camera check
+                if (z_c <= 0.1f) {
+                    valid = false;
+                    break;
+                }
+                
+                // Project to 2D
+                corners_2d[c].x = fx * x_c / z_c + cx;
+                corners_2d[c].y = fy * y_c / z_c + cy;
+            }
+            
+            if (!valid) continue;
+            
+            // ========================================
+            // Draw wireframe
+            // ========================================
+            CHECK_DW_ERROR(dwRenderEngine_setLineWidth(2.0f, m_re));
+            
+            // Bottom face (cyan)
+            CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_CYAN, m_re));
+            for (int c = 0; c < 4; ++c) {
+                dwVector2f line[2] = {corners_2d[c], corners_2d[(c + 1) % 4]};
+                CHECK_DW_ERROR(dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_2D,
+                                                     line, sizeof(dwVector2f), 0, 2, m_re));
+            }
+            
+            // Top face (yellow)
+            CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_YELLOW, m_re));
+            for (int c = 4; c < 8; ++c) {
+                int next = 4 + ((c - 4 + 1) % 4);
+                dwVector2f line[2] = {corners_2d[c], corners_2d[next]};
+                CHECK_DW_ERROR(dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_2D,
+                                                     line, sizeof(dwVector2f), 0, 2, m_re));
+            }
+            
+            // Vertical edges (green)
+            CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_re));
+            for (int c = 0; c < 4; ++c) {
+                dwVector2f line[2] = {corners_2d[c], corners_2d[c + 4]};
+                CHECK_DW_ERROR(dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_2D,
+                                                     line, sizeof(dwVector2f), 0, 2, m_re));
+            }
+            
+            // Front face edges (red, thicker) - indicates heading
+            CHECK_DW_ERROR(dwRenderEngine_setLineWidth(3.0f, m_re));
+            CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_re));
+            dwVector2f frontEdges[4][2] = {
+                {corners_2d[2], corners_2d[3]},  // front bottom
+                {corners_2d[6], corners_2d[7]},  // front top
+                {corners_2d[3], corners_2d[7]},  // front left vertical
+                {corners_2d[2], corners_2d[6]},  // front right vertical
+            };
+            for (int e = 0; e < 4; ++e) {
+                CHECK_DW_ERROR(dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_2D,
+                                                     frontEdges[e], sizeof(dwVector2f), 0, 2, m_re));
+            }
+            
+            // ========================================
+            // Depth label
+            // ========================================
+            CHECK_DW_ERROR(dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_8, m_re));
+            CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_WHITE, m_re));
+            
+            float minX = corners_2d[0].x, maxX = corners_2d[0].x, maxY = corners_2d[0].y;
+            for (int c = 1; c < 8; ++c) {
+                minX = std::min(minX, corners_2d[c].x);
+                maxX = std::max(maxX, corners_2d[c].x);
+                maxY = std::max(maxY, corners_2d[c].y);
+            }
+            
+            char depthText[32];
+            std::snprintf(depthText, sizeof(depthText), "%.1fm", box3D.depth);
+            dwVector2f textPos = {(minX + maxX) / 2.0f - 12.0f, maxY + 10.0f};
+            CHECK_DW_ERROR(dwRenderEngine_renderText2D(depthText, textPos, m_re));
+        }
+    }
 }
+
 
 void DriveSeg4CamClient::printStats()
 {
@@ -660,9 +894,11 @@ void DriveSeg4CamClient::printStats()
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         std::lock_guard<std::mutex> lock(m_frameMutex[i]);
         if (m_latestFrames[i].valid) {
-            std::cout << "  Cam" << i
+            std::cout << "  Cam" << i 
                       << " | Latest frame: " << m_latestFrames[i].frameId
-                      << " | Boxes: " << m_latestFrames[i].boxes.size() << "\n";
+                      << " | 2D Boxes: " << m_latestFrames[i].boxes.size() 
+                      << " | 3D Boxes: " << m_latestFrames[i].boxes3D.size()
+                      << "\n";
         } else {
             std::cout << "  Cam" << i << " | No frames received yet\n";
         }
@@ -713,9 +949,9 @@ int main(int argc, const char** argv)
         DriveSeg4CamClient app(args);
         app.initializeWindow("DriveSeg4Cam Client", 1280, 800, args.enabled("offscreen"));
         if (!args.enabled("offscreen")) app.setProcessRate(30);
-
+        
         return app.run();
-
+        
     } catch (const std::exception& e) {
         std::cerr << "[Client] Exception: " << e.what() << "\n";
         return -1;
