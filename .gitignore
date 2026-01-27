@@ -17,4 +17,3 @@
 *.prototxt
 *.weights
 *.cfg
-debug-logs/

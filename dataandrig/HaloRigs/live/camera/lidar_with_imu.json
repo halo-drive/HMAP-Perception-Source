@@ -1,3 +1,9 @@
+######################
+# this is the rig file for the lidar with imu and gps with real t valuys based on the lidar position on the vehicle
+######################
+
+
+
 {
     "rig": {
         "sensors": [
@@ -44,7 +50,7 @@
                     "quaternion": [0.0, 0.0, 0.0, 1.0],
                     "t": [0.0, 0.0, 0.0]
                 },
-                "parameter": "connection-type=usb,fifo-size=1024",
+                "parameter": "connection-type=ethernet,ip=192.168.1.203,port=2000,fifo-size=1024",
                 "properties": null,
                 "protocol": "imu.novatel"
             },

@@ -1,0 +1,1 @@
+this application provides visualization for inferences from stanalone ipc server application.

@@ -1,0 +1,1 @@
+./lidar_calibration --rig=/usr/local/driveworks-5.20/samples/src/sensors/lidar/lidar_calibration/rig.json --num-frames=100 --max-iters=50 --verbose=true

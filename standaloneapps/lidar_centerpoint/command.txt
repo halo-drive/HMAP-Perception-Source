@@ -1,0 +1,2 @@
+./lidar_centerpoint --rigFile='/haloRigs/live/lidar/rig_dual_vlp16.json' --pfeEngine='/usr/local/driveworks/samples/src/sensors/lidar/lidar_centerpoint/pfe_fp16.engine'  --rpnEngine='/usr/local/driveworks/samples/src/sensors/lidar/lidar_centerpoint/rpn_fp16.engine'
+
