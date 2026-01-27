@@ -36,6 +36,10 @@
 #include <dw/image/Image.h>
 #include <dw/interop/streamer/ImageStreamer.h>
 
+// Rectification
+#include <dw/imageprocessing/geometry/rectifier/Rectifier.h>
+#include <dw/calibration/cameramodel/CameraModel.h>
+
 #include <dw/rig/Rig.h>
 #include <dw/sensors/common/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
@@ -289,6 +293,20 @@ private:
     dwRect m_roi[MAX_CAMS]{};
     dwImageHandle_t m_imgRGBA[MAX_CAMS]{DW_NULL_HANDLE};
 
+    // Rectification
+    dwCameraModelHandle_t m_cameraModelIn[MAX_CAMS]{DW_NULL_HANDLE};   // Input fisheye camera models
+    dwCameraModelHandle_t m_cameraModelOut{DW_NULL_HANDLE};            // Output pinhole camera model (shared)
+    dwRectifierHandle_t m_rectifier[MAX_CAMS]{DW_NULL_HANDLE};         // Rectifier handles
+    dwImageHandle_t m_rectifiedImage[MAX_CAMS]{DW_NULL_HANDLE};        // Rectified output images
+    bool m_rectificationEnabled{true};                                  // Enable/disable rectification
+    bool m_useLDC{false};                                               // Use LDC hardware (VIBRANTE only)
+
+    // LDC input image pool (VIBRANTE only)
+    static constexpr uint32_t LDC_INPUT_POOL_SIZE = 8;
+    dwImageHandle_t m_ldcInputImages[MAX_CAMS][LDC_INPUT_POOL_SIZE]{};
+    dwImageHandle_t m_nvmediaRGBA[MAX_CAMS]{DW_NULL_HANDLE};  // Intermediate NVMedia RGBA for LDC
+    dwImageStreamerHandle_t m_streamerNvmToCuda[MAX_CAMS]{DW_NULL_HANDLE};  // NVMedia→CUDA streamer
+
     // Segmentation DNN
     dwDNNHandle_t m_dnn{DW_NULL_HANDLE};
     dwDNNTensorProperties m_inProps{};
@@ -428,6 +446,7 @@ private:
     // Init
     void initDW();
     void initCameras();
+    void initRectifiers();  // Initialize rectification for all cameras
     void initDNN();
     void initDetectionDNN();
     void initPerCameraDNN(uint32_t i);
@@ -489,6 +508,8 @@ bool DriveSeg4CamServer::initialize()
 
     initCameras();
     CHECK_DW_ERROR(dwSAL_start(m_sal));
+
+    initRectifiers();  // Initialize rectification after cameras, before DNN
 
     initDNN();
     initDetectionDNN();
@@ -580,6 +601,46 @@ void DriveSeg4CamServer::release()
         }
     }
 
+    // Release rectification resources
+    for (uint32_t i = 0; i < m_numCameras; ++i) {
+        if (m_rectifier[i]) {
+            dwRectifier_release(m_rectifier[i]);
+            m_rectifier[i] = DW_NULL_HANDLE;
+        }
+        if (m_cameraModelIn[i]) {
+            dwCameraModel_release(m_cameraModelIn[i]);
+            m_cameraModelIn[i] = DW_NULL_HANDLE;
+        }
+        if (m_rectifiedImage[i]) {
+            dwImage_destroy(m_rectifiedImage[i]);
+            m_rectifiedImage[i] = DW_NULL_HANDLE;
+        }
+#ifdef VIBRANTE
+        // Release LDC input image pool
+        for (uint32_t j = 0; j < LDC_INPUT_POOL_SIZE; ++j) {
+            if (m_ldcInputImages[i][j]) {
+                dwImage_destroy(m_ldcInputImages[i][j]);
+                m_ldcInputImages[i][j] = DW_NULL_HANDLE;
+            }
+        }
+        // Release intermediate NVMedia RGBA buffer
+        if (m_nvmediaRGBA[i]) {
+            dwImage_destroy(m_nvmediaRGBA[i]);
+            m_nvmediaRGBA[i] = DW_NULL_HANDLE;
+        }
+        // Release NVMedia→CUDA streamer
+        if (m_streamerNvmToCuda[i]) {
+            dwImageStreamer_release(m_streamerNvmToCuda[i]);
+            m_streamerNvmToCuda[i] = DW_NULL_HANDLE;
+        }
+#endif
+    }
+    if (m_cameraModelOut) {
+        dwCameraModel_release(m_cameraModelOut);
+        m_cameraModelOut = DW_NULL_HANDLE;
+    }
+    std::cout << "[Rectifier] Released rectification resources\n";
+
     // Release shared DNNs (segmentation and detection)
     if (m_dnn) dwDNN_release(m_dnn);
     if (m_detDnn) dwDNN_release(m_detDnn);
@@ -655,6 +716,151 @@ void DriveSeg4CamServer::initCameras()
         m_roi[i] = {0, 0, (int32_t)rgbaProps.width, (int32_t)rgbaProps.height};
         CHECK_DW_ERROR(dwImage_create(&m_imgRGBA[i], rgbaProps, m_ctx));
     }
+}
+
+void DriveSeg4CamServer::initRectifiers()
+{
+    std::cout << "[Rectifier] Initializing rectification...\n";
+
+    // Get image properties from first camera
+    dwImageProperties imgProps{};
+    CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&imgProps, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, m_cam[0]));
+
+    const uint32_t width = imgProps.width;
+    const uint32_t height = imgProps.height;
+
+    std::cout << "[Rectifier] Image size: " << width << "x" << height << "\n";
+
+    // Create output pinhole camera model (rectified - no distortion)
+    // Parameters calculated from rig ftheta model: f = 1/bw_poly[1] = 1867.91
+    dwPinholeCameraConfig pinholeConf{};
+    pinholeConf.width = width;
+    pinholeConf.height = height;
+    pinholeConf.u0 = 1927.764404f;      // cx from rig (ftheta principal point)
+    pinholeConf.v0 = 1096.686646f;      // cy from rig (ftheta principal point)
+    pinholeConf.focalX = 1867.9131f;    // f = 1/bw_poly[1], calculated from ftheta
+    pinholeConf.focalY = 1867.9131f;    // f = 1/bw_poly[1], calculated from ftheta
+    pinholeConf.distortion[0] = 0.0f;   // No distortion in rectified output
+    pinholeConf.distortion[1] = 0.0f;
+    pinholeConf.distortion[2] = 0.0f;
+    pinholeConf.polynomialType = DW_PINHOLE_CAMERA_POLYNOMIAL_TYPE_FORWARD;
+
+    CHECK_DW_ERROR(dwCameraModel_initializePinhole(&m_cameraModelOut, &pinholeConf, m_ctx));
+    std::cout << "[Rectifier] Output pinhole camera model created\n";
+
+#if 0  // LDC disabled - using GPU rectification instead (TODO: fix LDC YUV→RGBA conversion)
+    // Use LDC hardware on VIBRANTE platforms
+    m_useLDC = true;
+    std::cout << "[Rectifier] Using LDC hardware acceleration (VIBRANTE)\n";
+
+    for (uint32_t i = 0; i < m_numCameras; ++i) {
+        // Find sensor index in rig
+        uint32_t sensorIdx = 0;
+        CHECK_DW_ERROR(dwRig_findSensorByTypeIndex(&sensorIdx, DW_SENSOR_CAMERA, i, m_rig));
+
+        // Initialize input camera model from rig (contains fisheye/ftheta calibration)
+        CHECK_DW_ERROR(dwCameraModel_initialize(&m_cameraModelIn[i], sensorIdx, m_rig));
+        std::cout << "[Rectifier] Input camera model loaded from rig for camera " << i << "\n";
+
+        // Initialize rectifier with input and output camera models
+        CHECK_DW_ERROR(dwRectifier_initialize(&m_rectifier[i], m_cameraModelIn[i], m_cameraModelOut, m_ctx));
+        std::cout << "[Rectifier] Rectifier initialized for camera " << i << "\n";
+
+        // ========================================
+        // Create and register OUTPUT images (rectified)
+        // ========================================
+        dwImageProperties rectProps{};
+        rectProps.type = DW_IMAGE_NVMEDIA;
+        rectProps.format = DW_IMAGE_FORMAT_YUV420_UINT8_SEMIPLANAR;
+        rectProps.width = width;
+        rectProps.height = height;
+        rectProps.memoryLayout = DW_IMAGE_MEMORY_TYPE_PITCH;
+
+        // Append LDC allocation attributes for output
+        CHECK_DW_ERROR(dwRectifier_appendAllocationAttributes(&rectProps, m_rectifier[i]));
+        CHECK_DW_ERROR(dwImage_create(&m_rectifiedImage[i], rectProps, m_ctx));
+
+        // Register rectified output image pool
+        dwImagePool outputPool{};
+        outputPool.images = &m_rectifiedImage[i];
+        outputPool.imageCount = 1;
+        CHECK_DW_ERROR(dwRectifier_registerImages(outputPool, m_rectifier[i]));
+        std::cout << "[Rectifier] LDC output image registered for camera " << i << "\n";
+
+        // ========================================
+        // Create and register INPUT images (camera)
+        // ========================================
+        dwImageProperties inputProps{};
+        CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&inputProps, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, m_cam[i]));
+
+        // Append allocation attributes from both sensor and rectifier
+        CHECK_DW_ERROR(dwSensorCamera_appendAllocationAttributes(&inputProps, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, m_cam[i]));
+        CHECK_DW_ERROR(dwRectifier_appendAllocationAttributes(&inputProps, m_rectifier[i]));
+
+        // Create input image pool
+        for (uint32_t j = 0; j < LDC_INPUT_POOL_SIZE; ++j) {
+            CHECK_DW_ERROR(dwImage_create(&m_ldcInputImages[i][j], inputProps, m_ctx));
+        }
+
+        // Register input image pool with rectifier
+        dwImagePool inputPool{};
+        inputPool.images = m_ldcInputImages[i];
+        inputPool.imageCount = LDC_INPUT_POOL_SIZE;
+        CHECK_DW_ERROR(dwRectifier_registerImages(inputPool, m_rectifier[i]));
+
+        // Set the image pool on the camera sensor
+        CHECK_DW_ERROR(dwSensorCamera_setImagePool(inputPool, m_cam[i]));
+        std::cout << "[Rectifier] LDC input image pool (" << LDC_INPUT_POOL_SIZE << " images) registered for camera " << i << "\n";
+
+        // ========================================
+        // Create intermediate NVMedia RGBA for conversion to CUDA
+        // NVMedia YUV → NVMedia RGBA → CUDA RGBA (via streamer)
+        // ========================================
+        dwImageProperties rgbaProps{};
+        rgbaProps.type = DW_IMAGE_NVMEDIA;
+        rgbaProps.format = DW_IMAGE_FORMAT_RGBA_UINT8;
+        rgbaProps.width = width;
+        rgbaProps.height = height;
+        rgbaProps.memoryLayout = DW_IMAGE_MEMORY_TYPE_PITCH;
+        CHECK_DW_ERROR(dwImage_create(&m_nvmediaRGBA[i], rgbaProps, m_ctx));
+        std::cout << "[Rectifier] Intermediate NVMedia RGBA buffer created for camera " << i << "\n";
+
+        // Create NVMedia → CUDA streamer for final conversion
+        CHECK_DW_ERROR(dwImageStreamer_initialize(&m_streamerNvmToCuda[i], &rgbaProps, DW_IMAGE_CUDA, m_ctx));
+        std::cout << "[Rectifier] NVMedia→CUDA streamer created for camera " << i << "\n";
+    }
+
+    std::cout << "[Rectifier] LDC hardware rectification initialization complete\n";
+
+#else
+    // Use GPU-based rectification on non-VIBRANTE platforms
+    m_useLDC = false;
+    std::cout << "[Rectifier] Using GPU-based rectification\n";
+
+    for (uint32_t i = 0; i < m_numCameras; ++i) {
+        // Find sensor index in rig
+        uint32_t sensorIdx = 0;
+        CHECK_DW_ERROR(dwRig_findSensorByTypeIndex(&sensorIdx, DW_SENSOR_CAMERA, i, m_rig));
+
+        // Initialize input camera model from rig (contains fisheye/ftheta calibration)
+        CHECK_DW_ERROR(dwCameraModel_initialize(&m_cameraModelIn[i], sensorIdx, m_rig));
+        std::cout << "[Rectifier] Input camera model loaded from rig for camera " << i << "\n";
+
+        // Initialize rectifier with input and output camera models
+        CHECK_DW_ERROR(dwRectifier_initialize(&m_rectifier[i], m_cameraModelIn[i], m_cameraModelOut, m_ctx));
+        std::cout << "[Rectifier] Rectifier initialized for camera " << i << "\n";
+
+        // Create CUDA image for GPU-based rectification
+        dwImageProperties rectProps = imgProps;
+        CHECK_DW_ERROR(dwImage_create(&m_rectifiedImage[i], rectProps, m_ctx));
+        std::cout << "[Rectifier] GPU rectified image buffer created for camera " << i << "\n";
+    }
+
+    std::cout << "[Rectifier] GPU rectification initialization complete\n";
+#endif
+
+    m_rectificationEnabled = true;
+    std::cout << "[Rectifier] Rectification initialization complete for " << m_numCameras << " cameras\n";
 }
 
 void DriveSeg4CamServer::initDNN()
@@ -1001,15 +1207,48 @@ void DriveSeg4CamServer::startAllInferences(dwCameraFrameHandle_t frames[])
         if (!c.detRunning) {
             try {
                 c.detStartTime = std::chrono::high_resolution_clock::now();
-                
-                dwImageHandle_t src = DW_NULL_HANDLE;
-                CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frames[i]));
-                CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
-                
+
+                // Apply rectification if enabled
+                if (m_rectificationEnabled && m_rectifier[i] != DW_NULL_HANDLE) {
+#if 0  // LDC disabled
+                    // LDC hardware: use native processed image as input
+                    dwImageHandle_t srcNative = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwSensorCamera_getImage(&srcNative, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frames[i]));
+
+                    // Rectify using LDC: srcNative (NVMedia YUV) -> m_rectifiedImage (NVMedia YUV)
+                    CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], srcNative, nullptr, m_rectifier[i]));
+
+                    // Step 1: NVMedia YUV → NVMedia RGBA
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_nvmediaRGBA[i], m_rectifiedImage[i], m_ctx));
+
+                    // Step 2: NVMedia RGBA → CUDA RGBA via streamer
+                    CHECK_DW_ERROR(dwImageStreamer_producerSend(m_nvmediaRGBA[i], m_streamerNvmToCuda[i]));
+                    dwImageHandle_t convergenceImage = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwImageStreamer_consumerReceive(&convergenceImage, 33000, m_streamerNvmToCuda[i]));
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], convergenceImage, m_ctx));
+                    CHECK_DW_ERROR(dwImageStreamer_consumerReturn(&convergenceImage, m_streamerNvmToCuda[i]));
+                    CHECK_DW_ERROR(dwImageStreamer_producerReturn(nullptr, 33000, m_streamerNvmToCuda[i]));
+#else
+                    // GPU rectification: use CUDA RGBA as input
+                    dwImageHandle_t src = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frames[i]));
+
+                    // Rectify: src (distorted) -> m_rectifiedImage (undistorted)
+                    CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], src, nullptr, m_rectifier[i]));
+                    // Copy rectified image to working buffer
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], m_rectifiedImage[i], m_ctx));
+#endif
+                } else {
+                    // No rectification - use raw image
+                    dwImageHandle_t src = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frames[i]));
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
+                }
+
                 CHECK_DW_ERROR(dwDataConditioner_prepareData(
-                    c.detInTensor, &m_imgRGBA[i], 1, &m_roi[i], 
+                    c.detInTensor, &m_imgRGBA[i], 1, &m_roi[i],
                     cudaAddressModeClamp, c.detConditioner));
-                
+
                 runDetectionInference(i);
                 c.detRunning = true;
             } catch (const std::exception& e) {
@@ -1099,9 +1338,42 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
 
 void DriveSeg4CamServer::prepareInput(uint32_t i, dwCameraFrameHandle_t frame)
 {
-    dwImageHandle_t src = DW_NULL_HANDLE;
-    CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frame));
-    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
+    // Apply rectification if enabled
+    if (m_rectificationEnabled && m_rectifier[i] != DW_NULL_HANDLE) {
+#if 0  // LDC disabled
+        // LDC hardware: use native processed image as input
+        dwImageHandle_t srcNative = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwSensorCamera_getImage(&srcNative, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
+
+        // Rectify using LDC: srcNative (NVMedia YUV) -> m_rectifiedImage (NVMedia YUV)
+        CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], srcNative, nullptr, m_rectifier[i]));
+
+        // Step 1: NVMedia YUV → NVMedia RGBA
+        CHECK_DW_ERROR(dwImage_copyConvert(m_nvmediaRGBA[i], m_rectifiedImage[i], m_ctx));
+
+        // Step 2: NVMedia RGBA → CUDA RGBA via streamer
+        CHECK_DW_ERROR(dwImageStreamer_producerSend(m_nvmediaRGBA[i], m_streamerNvmToCuda[i]));
+        dwImageHandle_t convergenceImage = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwImageStreamer_consumerReceive(&convergenceImage, 33000, m_streamerNvmToCuda[i]));
+        CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], convergenceImage, m_ctx));
+        CHECK_DW_ERROR(dwImageStreamer_consumerReturn(&convergenceImage, m_streamerNvmToCuda[i]));
+        CHECK_DW_ERROR(dwImageStreamer_producerReturn(nullptr, 33000, m_streamerNvmToCuda[i]));
+#else
+        // GPU rectification: use CUDA RGBA as input
+        dwImageHandle_t src = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frame));
+
+        // Rectify: src (distorted) -> m_rectifiedImage (undistorted)
+        CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], src, nullptr, m_rectifier[i]));
+        // Copy rectified image to working buffer
+        CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], m_rectifiedImage[i], m_ctx));
+#endif
+    } else {
+        // No rectification - use raw image
+        dwImageHandle_t src = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frame));
+        CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
+    }
 
     auto &c = m_dnnCtx[i];
     CHECK_DW_ERROR(dwDataConditioner_prepareData(

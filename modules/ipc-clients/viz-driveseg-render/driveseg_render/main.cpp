@@ -209,11 +209,12 @@ void DriveSeg4CamClient::initIntrinsics()
         const float scaleX = transW / origW;
         const float scaleY = transH / origH;
         
-        // Original rectified intrinsics
-        const float fx_orig = 1655.2066956340523f;
-        const float fy_orig = 1656.334760722568f;
-        const float cx_orig = 1819.2548585234283f;
-        const float cy_orig = 1019.9403399106654f;
+        // Rectified pinhole camera intrinsics (must match server's dwPinholeCameraConfig)
+        // Server uses: f = 1/bw_poly[1] = 1867.9131, cx/cy from ftheta principal point
+        const float fx_orig = 1867.9131f;
+        const float fy_orig = 1867.9131f;
+        const float cx_orig = 1927.764404f;
+        const float cy_orig = 1096.686646f;
         
         // Scale to 640x640
         m_intrinsics.fx = fx_orig * scaleX;  // ~275.3
@@ -714,24 +715,8 @@ void DriveSeg4CamClient::renderDetectionBoxes(uint32_t i, const ReceivedFrame& f
     const float cx = m_intrinsics.cx;
     const float cy = m_intrinsics.cy;
 
-    // ========================================
-    // Render 2D boxes (red)
-    // ========================================
-    CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_re));
-    CHECK_DW_ERROR(dwRenderEngine_setLineWidth(2.0f, m_re));
-    CHECK_DW_ERROR(dwRenderEngine_render(DW_RENDER_ENGINE_PRIMITIVE_TYPE_BOXES_2D,
-                                         frame.boxes.data(), sizeof(dwRectf), 0,
-                                         frame.boxes.size(), m_re));
-
-    // ========================================
-    // Render 2D labels
-    // ========================================
-    CHECK_DW_ERROR(dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_WHITE, m_re));
-    CHECK_DW_ERROR(dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_8, m_re));
-    for (size_t j = 0; j < frame.labels.size(); ++j) {
-        dwVector2f labelPos = {frame.boxes[j].x + 2, frame.boxes[j].y - 2};
-        CHECK_DW_ERROR(dwRenderEngine_renderText2D(frame.labels[j].c_str(), labelPos, m_re));
-    }
+    // 2D boxes suppressed - only 3D wireframes rendered
+    // (2D boxes still used internally for 3D position calculation)
 
     // ========================================
     // Render 3D boxes with camera projection
@@ -753,19 +738,30 @@ void DriveSeg4CamClient::renderDetectionBoxes(uint32_t i, const ReceivedFrame& f
             float x_2d = box2D.x + box2D.width / 2.0f;
             float y_2d = box2D.y + box2D.height;  // Bottom edge
             float z = box3D.depth;
-            
+
             // Unproject to camera coordinates
             float x_cam = (x_2d - cx) * z / fx;
             float y_cam_bottom = (y_2d - cy) * z / fy;
-            
-            // Shift to geometric center
-            float y_cam = y_cam_bottom - box3D.height / 2.0f;
-            float z_cam = z;
-            
-            float h = box3D.height;
-            float w = box3D.width;
-            float l = box3D.length;
+
+            // ========================================
+            // Derive 3D dimensions from 2D box + depth
+            // This ensures 3D box aligns with 2D detection
+            // ========================================
+            float h = (box2D.height * z) / fy;  // height from 2D box
+            float w = (box2D.width * z) / fx;   // width from 2D box
+
+            // Length: use aspect ratio (cars ~2x longer than wide)
+            // Or use network output scaled to match derived width
+            float aspect_ratio = (box3D.length > 0.1f && box3D.width > 0.1f)
+                                 ? (box3D.length / box3D.width)
+                                 : 2.0f;  // default car aspect ratio
+            float l = w * aspect_ratio;
+
             float ry = box3D.rotation;
+
+            // Shift to geometric center
+            float y_cam = y_cam_bottom - h / 2.0f;
+            float z_cam = z;
             
             // ========================================
             // 8 corners in object frame (KITTI convention)
@@ -775,17 +771,18 @@ void DriveSeg4CamClient::renderDetectionBoxes(uint32_t i, const ReceivedFrame& f
             float half_w = w / 2.0f;
             float half_h = h / 2.0f;
             
-            // Corners: [x, y, z] in object frame
+            // Corners: [x, y, z] in object frame (KITTI convention)
+            // X = width (left-right), Y = height (up-down), Z = length (front-back)
             // Bottom = +y, Top = -y (camera Y points down)
             float corners_obj[8][3] = {
-                {-half_l,  half_h, -half_w},  // 0: back-left-bottom
-                { half_l,  half_h, -half_w},  // 1: back-right-bottom
-                { half_l,  half_h,  half_w},  // 2: front-right-bottom
-                {-half_l,  half_h,  half_w},  // 3: front-left-bottom
-                {-half_l, -half_h, -half_w},  // 4: back-left-top
-                { half_l, -half_h, -half_w},  // 5: back-right-top
-                { half_l, -half_h,  half_w},  // 6: front-right-top
-                {-half_l, -half_h,  half_w},  // 7: front-left-top
+                {-half_w,  half_h, -half_l},  // 0: back-left-bottom
+                { half_w,  half_h, -half_l},  // 1: back-right-bottom
+                { half_w,  half_h,  half_l},  // 2: front-right-bottom
+                {-half_w,  half_h,  half_l},  // 3: front-left-bottom
+                {-half_w, -half_h, -half_l},  // 4: back-left-top
+                { half_w, -half_h, -half_l},  // 5: back-right-top
+                { half_w, -half_h,  half_l},  // 6: front-right-top
+                {-half_w, -half_h,  half_l},  // 7: front-left-top
             };
             
             // ========================================

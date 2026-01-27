@@ -11,9 +11,8 @@ set(LIBRARIES
     samples_framework_simple_camera
     samples_framework_simple_streamer
     ${Driveworks_LIBRARIES}
-    /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so
+    /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so 
 )
-
 include_directories(/usr/include/aarch64-linux-gnu)
 
 add_executable(${PROJECT_NAME} ${SOURCES})
