@@ -22,6 +22,8 @@
 #include <dwvisualization/core/RenderEngine.h>
 #include <dwvisualization/core/Visualization.h>
 
+#include <cuda_runtime_api.h>
+
 #include "../lidar_object_detection_interprocess_communiation/DetectionPacket.hpp"
 
 using namespace dw_samples::common;
@@ -214,11 +216,12 @@ public:
                                                    MAX_DETECTIONS * 24,  // 12 edges * 2 vertices per box
                                                    m_renderEngine));
         
+        // Free space buffer (MUCH larger to handle all free space points)
         CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_freeSpaceBufferId,
                                                    DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
                                                    sizeof(dwVector3f),
                                                    0,
-                                                   360,
+                                                   50000,  // Match original capacity
                                                    m_renderEngine));
         
         // Ground plane buffer (grid mesh)
@@ -256,42 +259,55 @@ public:
             return;
         }
         
-        // Clear buffer and set center
+        // Clear buffer and set center (EXACT as original)
         dwRenderEngine_reset(m_renderEngine);
         getMouseView().setCenter(0.0f, 0.0f, 0.0f);
         
-        // Set up rendering with mouse-controlled camera
+        // Set up rendering with mouse-controlled camera (EXACT as original)
         dwRenderEngine_setTile(m_tile, m_renderEngine);
         dwRenderEngine_setBackgroundColor({0.1f, 0.1f, 0.1f, 1.0f}, m_renderEngine);
         
-        // Use mouse view for camera control (like original)
         dwMatrix4f modelView;
         Mat4_AxB(modelView.array, getMouseView().getModelView()->array, DW_IDENTITY_TRANSFORMATION3F.array);
         dwRenderEngine_setModelView(&modelView, m_renderEngine);
         dwRenderEngine_setProjection(getMouseView().getProjection(), m_renderEngine);
         
-        // Render ground plane first (if valid)
-        if (m_currentPacket.groundPlane.valid) {
-            renderGroundPlane();
-        }
-        
-        // Render point cloud with height-based colors
+        // Render point cloud first (EXACT order as original)
         if (m_currentPacket.numPoints > 0) {
             renderPointCloud();
         }
         
-        // Render bounding boxes
+        // Render ground plane (EXACT as original - set tile and camera before rendering)
+        if (m_currentPacket.groundPlane.valid) {
+            dwRenderEngine_setTile(m_tile, m_renderEngine);
+            Mat4_AxB(modelView.array, getMouseView().getModelView()->array, DW_IDENTITY_TRANSFORMATION3F.array);
+            dwRenderEngine_setModelView(&modelView, m_renderEngine);
+            dwRenderEngine_setProjection(getMouseView().getProjection(), m_renderEngine);
+            renderGroundPlane();
+        }
+        
+        // Render bounding boxes (EXACT as original - set tile before rendering)
         if (m_currentPacket.numDetections > 0) {
+            dwRenderEngine_setTile(m_tile, m_renderEngine);
             renderBoundingBoxes();
         }
         
         // Render free space
         if (m_currentPacket.freeSpace.numPoints > 0) {
+            dwRenderEngine_setTile(m_tile, m_renderEngine);
+            Mat4_AxB(modelView.array, getMouseView().getModelView()->array, DW_IDENTITY_TRANSFORMATION3F.array);
+            dwRenderEngine_setModelView(&modelView, m_renderEngine);
+            dwRenderEngine_setProjection(getMouseView().getProjection(), m_renderEngine);
             renderFreeSpace();
         }
         
         // Render status text
         renderStatusText();
+        
+        // CUDA sync at end of frame (like original)
+        #ifdef __aarch64__
+        CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+        #endif
     }
     
     void onRelease() override
@@ -336,37 +352,51 @@ public:
 private:
     void renderPointCloud()
     {
-        // Map render buffer
-        dwVector4f* vertices = nullptr;
-        uint32_t bufferSize = m_currentPacket.numPoints * sizeof(dwVector4f);
+        // Use exact same technique as original with CUDA sync
+        uint32_t sizeInBytes = m_currentPacket.numPoints * sizeof(dwVector4f);
+        dwVector4f* dataToRender = nullptr;
+        
+        // CUDA synchronization (like original)
+        #ifdef __aarch64__
+        CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+        #endif
         
         CHECK_DW_ERROR(dwRenderEngine_mapBuffer(m_pointCloudBufferId,
-                                               reinterpret_cast<void**>(&vertices),
+                                               reinterpret_cast<void**>(&dataToRender),
                                                0,
-                                               bufferSize,
+                                               sizeInBytes,
                                                DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
                                                m_renderEngine));
         
+        // Clear buffer first on Orin (like original)
+        #ifdef __aarch64__
+        memset(dataToRender, 0, sizeInBytes);
+        #endif
+        
         // Copy points with intensity (EXACT as original)
         for (uint32_t i = 0; i < m_currentPacket.numPoints; ++i) {
-            vertices[i].x = m_currentPacket.points[i * 4 + 0];
-            vertices[i].y = m_currentPacket.points[i * 4 + 1];
-            vertices[i].z = m_currentPacket.points[i * 4 + 2];
-            vertices[i].w = m_currentPacket.points[i * 4 + 3];  // Keep original intensity
+            dataToRender[i].x = m_currentPacket.points[i * 4 + 0];
+            dataToRender[i].y = m_currentPacket.points[i * 4 + 1];
+            dataToRender[i].z = m_currentPacket.points[i * 4 + 2];
+            dataToRender[i].w = m_currentPacket.points[i * 4 + 3];  // Keep original intensity
         }
         
         CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(m_pointCloudBufferId,
                                                   DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
                                                   m_renderEngine));
         
-        // Render in GREEN (like original ICP aligned points)
-        dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
+        // Render in RED (like original aligned/stitched points)
+        dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_renderEngine);
         dwRenderEngine_setPointSize(1.0f, m_renderEngine);
         CHECK_DW_ERROR(dwRenderEngine_renderBuffer(m_pointCloudBufferId, m_currentPacket.numPoints, m_renderEngine));
     }
     
     void renderBoundingBoxes()
     {
+        // Prepare text labels (EXACT as original)
+        std::vector<std::pair<dwVector3f, std::string>> labelTexts;    // Above box - class & confidence
+        std::vector<std::pair<dwVector3f, std::string>> debugTexts;    // Below box - point count & distance
+        
         // Group boxes by class (EXACT as original)
         std::vector<DetectionBoundingBox> vehicleBoxes;
         std::vector<DetectionBoundingBox> pedestrianBoxes;
@@ -379,14 +409,63 @@ private:
                 case 1: pedestrianBoxes.push_back(box); break;
                 case 2: cyclistBoxes.push_back(box); break;
             }
+            
+            // Prepare text labels (EXACT as original)
+            float halfHeight = box.height / 2.0f;
+            dwVector3f labelPos = {box.x, box.y, box.z + halfHeight + 0.3f};
+            dwVector3f debugPos = {box.x, box.y, box.z - halfHeight - 0.3f};
+            
+            // Class name
+            std::string className;
+            switch (box.classId) {
+                case 0: className = "Vehicle"; break;
+                case 1: className = "Pedestrian"; break;
+                case 2: className = "Cyclist"; break;
+                default: className = "Unknown"; break;
+            }
+            
+            // Count points and distance
+            int pointCount = countPointsInBox(box);
+            float distance = std::sqrt(box.x * box.x + box.y * box.y);
+            
+            // Label text
+            char labelText[64];
+            snprintf(labelText, sizeof(labelText), "%s (%.2f)", className.c_str(), box.confidence);
+            labelTexts.emplace_back(labelPos, std::string(labelText));
+            
+            // Debug text
+            char debugText[64];
+            snprintf(debugText, sizeof(debugText), "Pts: %d, Dist: %.1fm", pointCount, distance);
+            debugTexts.emplace_back(debugPos, std::string(debugText));
         }
         
-        // Render each class with its color (EXACT as original)
+        // Render each class with its color (EXACT as original with proper buffer clearing)
         auto renderBoxGroup = [&](const std::vector<DetectionBoundingBox>& boxes, dwRenderEngineColorRGBA color) {
             if (boxes.empty()) return;
             
-            std::vector<dwVector3f> lines;
-            lines.reserve(boxes.size() * 24);
+            uint32_t expectedVertices = boxes.size() * 24;  // 12 edges × 2 vertices per box
+            uint32_t bufferSizeBytes = expectedVertices * sizeof(dwVector3f);
+            
+            // CUDA sync before mapping (like original)
+            #ifdef __aarch64__
+            CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+            #endif
+            
+            // Map buffer (EXACT as original)
+            dwVector3f* vertices = nullptr;
+            CHECK_DW_ERROR(dwRenderEngine_mapBuffer(m_boxLineBufferId,
+                                                   reinterpret_cast<void**>(&vertices),
+                                                   0,
+                                                   bufferSizeBytes,
+                                                   DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
+                                                   m_renderEngine));
+            
+            // Clear buffer on Orin (like original - prevents weird lines)
+            #ifdef __aarch64__
+            memset(vertices, 0, bufferSizeBytes);
+            #endif
+            
+            uint32_t vertexIndex = 0;
             
             for (const auto& box : boxes) {
                 float hw = box.width / 2.0f;
@@ -416,26 +495,28 @@ private:
                 };
                 
                 for (int i = 0; i < 12; ++i) {
-                    lines.push_back(corners[edges[i][0]]);
-                    lines.push_back(corners[edges[i][1]]);
+                    if (vertexIndex + 2 > expectedVertices) break;  // Safety check
+                    vertices[vertexIndex++] = corners[edges[i][0]];
+                    vertices[vertexIndex++] = corners[edges[i][1]];
                 }
                 
                 // Render yellow points inside box (EXACT as original)
                 renderPointsInBox(box);
             }
             
-            if (!lines.empty()) {
-                CHECK_DW_ERROR(dwRenderEngine_setBuffer(m_boxLineBufferId,
-                                                       DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-                                                       lines.data(),
-                                                       sizeof(dwVector3f),
-                                                       0,
-                                                       lines.size(),
-                                                       m_renderEngine));
-                
+            // CUDA sync before unmap (like original)
+            #ifdef __aarch64__
+            CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+            #endif
+            
+            CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(m_boxLineBufferId,
+                                                     DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
+                                                     m_renderEngine));
+            
+            if (vertexIndex > 0) {
                 dwRenderEngine_setColor(color, m_renderEngine);
                 dwRenderEngine_setLineWidth(2.0f, m_renderEngine);
-                CHECK_DW_ERROR(dwRenderEngine_renderBuffer(m_boxLineBufferId, lines.size(), m_renderEngine));
+                CHECK_DW_ERROR(dwRenderEngine_renderBuffer(m_boxLineBufferId, vertexIndex, m_renderEngine));
             }
         };
         
@@ -443,6 +524,43 @@ private:
         renderBoxGroup(vehicleBoxes, {1.0f, 0.0f, 0.0f, 1.0f});
         renderBoxGroup(pedestrianBoxes, {0.0f, 1.0f, 0.0f, 1.0f});
         renderBoxGroup(cyclistBoxes, {0.0f, 0.0f, 1.0f, 1.0f});
+        
+        // Render 3D text labels (EXACT as original)
+        dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_16, m_renderEngine);
+        dwRenderEngine_setColor({1.0f, 1.0f, 1.0f, 1.0f}, m_renderEngine); // White
+        
+        for (const auto& text : labelTexts) {
+            dwRenderEngine_renderText3D(text.second.c_str(), text.first, m_renderEngine);
+        }
+        
+        // Render debug texts in yellow (EXACT as original)
+        dwRenderEngine_setColor({1.0f, 1.0f, 0.0f, 1.0f}, m_renderEngine); // Yellow
+        
+        for (const auto& text : debugTexts) {
+            dwRenderEngine_renderText3D(text.second.c_str(), text.first, m_renderEngine);
+        }
+    }
+    
+    int countPointsInBox(const DetectionBoundingBox& box)
+    {
+        int count = 0;
+        float xMin = box.x - box.width/2;
+        float xMax = box.x + box.width/2;
+        float yMin = box.y - box.length/2;
+        float yMax = box.y + box.length/2;
+        float zMin = box.z - box.height/2;
+        float zMax = box.z + box.height/2;
+        
+        for (uint32_t i = 0; i < m_currentPacket.numPoints; ++i) {
+            float x = m_currentPacket.points[i * 4 + 0];
+            float y = m_currentPacket.points[i * 4 + 1];
+            float z = m_currentPacket.points[i * 4 + 2];
+            
+            if (x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax) {
+                count++;
+            }
+        }
+        return count;
     }
     
     void renderPointsInBox(const DetectionBoundingBox& box)
@@ -486,17 +604,27 @@ private:
     
     void renderFreeSpace()
     {
-        // Map render buffer
+        // Use exact same technique as original with CUDA sync
+        uint32_t numPoints = std::min(m_currentPacket.freeSpace.numPoints, 50000u);  // Match buffer capacity
+        uint32_t sizeInBytes = numPoints * sizeof(dwVector3f);
         dwVector3f* vertices = nullptr;
-        uint32_t numPoints = std::min(m_currentPacket.freeSpace.numPoints, 360u);
-        uint32_t bufferSize = numPoints * sizeof(dwVector3f);
+        
+        // CUDA sync (like original)
+        #ifdef __aarch64__
+        CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+        #endif
         
         CHECK_DW_ERROR(dwRenderEngine_mapBuffer(m_freeSpaceBufferId,
                                                reinterpret_cast<void**>(&vertices),
                                                0,
-                                               bufferSize,
+                                               sizeInBytes,
                                                DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
                                                m_renderEngine));
+        
+        // Clear buffer on Orin (like original)
+        #ifdef __aarch64__
+        memset(vertices, 0, sizeInBytes);
+        #endif
         
         // Convert free space points to 3D vertices (on ground level)
         for (uint32_t i = 0; i < numPoints; ++i) {
@@ -576,13 +704,18 @@ private:
     
     void renderStatusText()
     {
+        // Set up 2D text rendering (EXACT as original)
+        dwRenderEngine_setTile(0, m_renderEngine);
+        dwRenderEngine_setModelView(&DW_IDENTITY_MATRIX4F, m_renderEngine);
+        dwRenderEngine_setCoordinateRange2D({1.0f, 1.0f}, m_renderEngine);
+        dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_20, m_renderEngine);
+        dwRenderEngine_setColor({0.0f, 0.6f, 1.0f, 1.0f}, m_renderEngine);
+        
         char text[256];
         snprintf(text, sizeof(text), "Packets: %u | Frame: %u | Points: %u | Detections: %u",
                  m_packetCount, m_currentPacket.frameNumber, m_currentPacket.numPoints, m_currentPacket.numDetections);
         
-        dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_16, m_renderEngine);
-        dwRenderEngine_setColor({0.0f, 1.0f, 0.0f, 1.0f}, m_renderEngine);
-        dwRenderEngine_renderText2D(text, {0.02f, 0.02f}, m_renderEngine);
+        dwRenderEngine_renderText2D(text, {0.05f, 0.05f}, m_renderEngine);
     }
 };
 
