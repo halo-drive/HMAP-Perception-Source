@@ -1316,6 +1316,16 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
     if (c.detRunning && cudaEventQuery(c.detInferDone) == cudaSuccess) {
         collectDetectionResults(i);
         
+        if (!c.detBoxes.empty() && !c.stage2Running) {
+            c.stage2StartTime = std::chrono::high_resolution_clock::now();
+            try {
+                runStage2Inference(i);
+                c.stage2Running = true;
+            } catch (const std::exception& e) {
+                std::cout << "[Cam" << i << "] Stage 2 inference failed: " << e.what() << "\n";
+            }
+        }
+    
         auto endTime = std::chrono::high_resolution_clock::now();
         float ms = std::chrono::duration<float, std::milli>(endTime - c.detStartTime).count();
         c.avgDetMs = (c.avgDetMs * c.detCount + ms) / (c.detCount + 1);
@@ -1334,6 +1344,21 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
             }
         }
     }
+
+    if (c.stage2Running && cudaEventQuery(c.stage2InferDone) == cudaSuccess) {
+        collectStage2Results(i);
+        
+        auto endTime = std::chrono::high_resolution_clock::now();
+        float ms = std::chrono::duration<float, std::milli>(endTime - c.stage2StartTime).count();
+        c.avgStage2Ms = (c.avgStage2Ms * c.stage2Count + ms) / (c.stage2Count + 1);
+        
+        c.stage2Running = false;
+        c.stage2Count++;
+        
+        std::cout << "[Cam" << i << "] Stage 2 complete: " 
+                  << c.depths.size() << " 3D predictions in " << ms << "ms\n";
+    }
+
 }
 
 void DriveSeg4CamServer::prepareInput(uint32_t i, dwCameraFrameHandle_t frame)

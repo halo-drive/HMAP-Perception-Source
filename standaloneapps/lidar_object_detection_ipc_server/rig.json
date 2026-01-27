@@ -8,7 +8,7 @@
                     "quaternion": [0.0, 0.0, 0.0, 1.0],
                     "t": [0.0, 2.16, 1.52]
                 },
-                "parameter": "ip=192.168.1.150,port=2368,device=VELO_VLP16,scan-frequency=10.0,protocol=udp",
+                "parameter": "ip=192.168.1.201,port=2368,device=VELO_VLP16,scan-frequency=10.0,protocol=udp",
                 "properties": null,
                 "protocol": "lidar.socket",
                 "sensor2Rig": {
@@ -26,7 +26,7 @@
                     "quaternion": [0.0, 0.0, 0.0, 1.0],
                     "t": [0.0, 0.94, 1.80]
                 },
-                "parameter": "ip=192.168.1.151,port=2369,device=VELO_VLP16HR,scan-frequency=10.0,protocol=udp",
+                "parameter": "ip=192.168.1.202,port=2369,device=VELO_VLP16HR,scan-frequency=10.0,protocol=udp",
                 "properties": null,
                 "protocol": "lidar.socket",
                 "sensor2Rig": {
@@ -37,27 +37,7 @@
                 "correction_sensor_R_FLU": {
                     "roll-pitch-yaw": [0.0, 0.0, 0]
                 }
-            },
-            {
-                "name": "imu",
-                "nominalSensor2Rig": {
-                    "quaternion": [0.0, 0.0, 0.0, 1.0],
-                    "t": [0.0, 0.0, 0.0]
-                },
-                "parameter": "connection-type=usb,fifo-size=1024",
-                "properties": null,
-                "protocol": "imu.novatel"
-            },
-            {
-                "name": "gps",
-                "nominalSensor2Rig": {
-                    "quaternion": [0.0, 0.0, 0.0, 1.0],
-                    "t": [0.0, 0.0, 0.0]
-                },
-                "parameter": "connection-type=usb,fifo-size=1024",
-                "properties": null,
-                "protocol": "gps.novatel"
-            }  
+            }
         ],
         "vehicle": {
             "valid": true,

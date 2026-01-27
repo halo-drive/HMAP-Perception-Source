@@ -33,31 +33,11 @@
                     "quaternion": [0.0, 0.0, 0.0, 1.0],
                     "t": [0.0, 0.94, 1.80]
                 },
-                "correction_rig_T": [0.0, 0.0, 0.0],
+                "correction_rig_T": [-0.115101, -0.008711, 0.146887],
                 "correction_sensor_R_FLU": {
-                    "roll-pitch-yaw": [0.0, 0.0, 0]
+                    "roll-pitch-yaw": [0.329798, -2.047837, -5.024778]
                 }
-            },
-            {
-                "name": "imu",
-                "nominalSensor2Rig": {
-                    "quaternion": [0.0, 0.0, 0.0, 1.0],
-                    "t": [0.0, 0.0, 0.0]
-                },
-                "parameter": "connection-type=usb,fifo-size=1024",
-                "properties": null,
-                "protocol": "imu.novatel"
-            },
-            {
-                "name": "gps",
-                "nominalSensor2Rig": {
-                    "quaternion": [0.0, 0.0, 0.0, 1.0],
-                    "t": [0.0, 0.0, 0.0]
-                },
-                "parameter": "connection-type=usb,fifo-size=1024",
-                "properties": null,
-                "protocol": "gps.novatel"
-            }  
+            }
         ],
         "vehicle": {
             "valid": true,

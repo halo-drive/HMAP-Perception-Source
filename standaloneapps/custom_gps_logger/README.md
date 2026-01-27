@@ -2,6 +2,9 @@
 
 This is a modified version of the NVIDIA DriveWorks GPS sample that logs GPS data to JSON files and supports data comparison.
 
+this was used to understand rtk and feasibility to check if the vehicle is follwoing same recorded path or not.
+
+
 ## Features
 
 1. **Rig File Based Initialization**: GPS sensor is initialized from a rig configuration file instead of hardcoded parameters

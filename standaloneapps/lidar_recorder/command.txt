@@ -1,0 +1,3 @@
+application to record icp corrected stitched point clouds
+
+./lidar_recorder  --rig-file='/usr/local/driveworks-5.20/samples/src/sensors/lidar/rigFile/rig.json' --output-dir='/usr/local/record/'

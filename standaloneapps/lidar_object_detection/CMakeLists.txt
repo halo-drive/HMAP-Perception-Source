@@ -1,4 +1,4 @@
-project(lidar_object_detection_with_icp_free_space)
+project(lidar_object_detection)
 
 #-------------------------------------------------------------------------------
 # Project files
