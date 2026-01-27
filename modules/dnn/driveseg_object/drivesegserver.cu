@@ -36,6 +36,10 @@
 #include <dw/image/Image.h>
 #include <dw/interop/streamer/ImageStreamer.h>
 
+// Rectification
+#include <dw/imageprocessing/geometry/rectifier/Rectifier.h>
+#include <dw/calibration/cameramodel/CameraModel.h>
+
 #include <dw/rig/Rig.h>
 #include <dw/sensors/common/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
@@ -289,6 +293,20 @@ private:
     dwRect m_roi[MAX_CAMS]{};
     dwImageHandle_t m_imgRGBA[MAX_CAMS]{DW_NULL_HANDLE};
 
+    // Rectification
+    dwCameraModelHandle_t m_cameraModelIn[MAX_CAMS]{DW_NULL_HANDLE};   // Input fisheye camera models
+    dwCameraModelHandle_t m_cameraModelOut{DW_NULL_HANDLE};            // Output pinhole camera model (shared)
+    dwRectifierHandle_t m_rectifier[MAX_CAMS]{DW_NULL_HANDLE};         // Rectifier handles
+    dwImageHandle_t m_rectifiedImage[MAX_CAMS]{DW_NULL_HANDLE};        // Rectified output images
+    bool m_rectificationEnabled{true};                                  // Enable/disable rectification
+    bool m_useLDC{false};                                               // Use LDC hardware (VIBRANTE only)
+
+    // LDC input image pool (VIBRANTE only)
+    static constexpr uint32_t LDC_INPUT_POOL_SIZE = 8;
+    dwImageHandle_t m_ldcInputImages[MAX_CAMS][LDC_INPUT_POOL_SIZE]{};
+    dwImageHandle_t m_nvmediaRGBA[MAX_CAMS]{DW_NULL_HANDLE};  // Intermediate NVMedia RGBA for LDC
+    dwImageStreamerHandle_t m_streamerNvmToCuda[MAX_CAMS]{DW_NULL_HANDLE};  // NVMedia→CUDA streamer
+
     // Segmentation DNN
     dwDNNHandle_t m_dnn{DW_NULL_HANDLE};
     dwDNNTensorProperties m_inProps{};
@@ -302,10 +320,11 @@ private:
     dwDNNTensorProperties m_detOutProps{};
 
     //Stage2 Detection DNN  
-    dwDNNHandle_t m_stage2Dnn{DW_NULL_HANDLE};
+    dwDNNHandle_t m_stage2Dnn[MAX_CAMS]{DW_NULL_HANDLE};
     dwDNNTensorProperties m_stage2InPropsImage{};    // images input
     dwDNNTensorProperties m_stage2InPropsBoxes{};    // boxes_2d input
     dwDNNTensorProperties m_stage2OutProps[7]{};     // 7 outputs
+    uint32_t m_stage2OutputCount{0};
 
     static constexpr uint32_t STAGE2_MAX_BOXES = 100;  // Must match ONNX export
     //IPC isolaters 
@@ -339,6 +358,7 @@ private:
 
     typedef struct YoloScoreRect {
         dwRectf rectf;
+        dwRectf rectf640;
         float32_t score;
         uint16_t classIndex;
     } YoloScoreRect;
@@ -365,6 +385,7 @@ private:
         bool detRunning{false};
         
         std::vector<dwRectf> detBoxes;
+        std::vector<dwRectf> detBoxes640;
         std::vector<std::string> detLabels;
         std::mutex detMutex;
         
@@ -379,9 +400,6 @@ private:
         
 
         //stage 2 detection
-        cudaStream_t stage2Stream{nullptr};
-        cudaEvent_t stage2InferDone{nullptr};
-        
         dwDNNTensorHandle_t stage2InTensorImage{DW_NULL_HANDLE};
         dwDNNTensorHandle_t stage2InTensorBoxes{DW_NULL_HANDLE};
         dwDNNTensorHandle_t stage2OutTensorsDev[7]{DW_NULL_HANDLE};
@@ -389,8 +407,16 @@ private:
         dwDNNTensorStreamerHandle_t stage2OutStreamers[7]{DW_NULL_HANDLE};
         dwDNNTensorHandle_t stage2OutTensorsHost[7]{DW_NULL_HANDLE};
         
+        cudaStream_t stage2Stream{nullptr};
+        cudaEvent_t stage2InferDone{nullptr};
+
         bool stage2Running{false};
-        
+
+        float* stage2HostDepth{nullptr};
+        float* stage2HostDims{nullptr};
+        float* stage2HostRotBins{nullptr};
+        float* stage2HostRotRes{nullptr};
+
         // 3D results
         std::vector<float> depths;       // [N] depth in meters
         std::vector<float> dimensions;   // [N*3] h,w,l in meters  
@@ -420,6 +446,7 @@ private:
     // Init
     void initDW();
     void initCameras();
+    void initRectifiers();  // Initialize rectification for all cameras
     void initDNN();
     void initDetectionDNN();
     void initPerCameraDNN(uint32_t i);
@@ -482,6 +509,8 @@ bool DriveSeg4CamServer::initialize()
     initCameras();
     CHECK_DW_ERROR(dwSAL_start(m_sal));
 
+    initRectifiers();  // Initialize rectification after cameras, before DNN
+
     initDNN();
     initDetectionDNN();
     initStage2DNN();
@@ -509,12 +538,12 @@ bool DriveSeg4CamServer::initialize()
     return true;
 }
 
+
 void DriveSeg4CamServer::release()
 {
     std::cout << "[Server] Releasing...\n";
     m_running = false;
 
-    
     for (uint32_t i = 0; i < m_numCameras; ++i) {
         m_sendCV[i].notify_all();
     }
@@ -560,25 +589,68 @@ void DriveSeg4CamServer::release()
         if (c.detOutTensorDev) dwDNNTensor_destroy(c.detOutTensorDev);
         if (c.detOutStreamer) dwDNNTensorStreamer_release(c.detOutStreamer);
         if (c.detConditioner) dwDataConditioner_release(c.detConditioner);
+        
         if (c.stage2InferDone) cudaEventDestroy(c.stage2InferDone);
         if (c.stage2Stream) cudaStreamDestroy(c.stage2Stream);
         if (c.stage2InTensorImage) dwDNNTensor_destroy(c.stage2InTensorImage);
         if (c.stage2InTensorBoxes) dwDNNTensor_destroy(c.stage2InTensorBoxes);
         
-        for (uint32_t j = 0; j < 7; ++j) {
+        for (uint32_t j = 0; j < m_stage2OutputCount; ++j) {
             if (c.stage2OutTensorsDev[j]) dwDNNTensor_destroy(c.stage2OutTensorsDev[j]);
             if (c.stage2OutStreamers[j]) dwDNNTensorStreamer_release(c.stage2OutStreamers[j]);
         }
-
     }
 
+    // Release rectification resources
+    for (uint32_t i = 0; i < m_numCameras; ++i) {
+        if (m_rectifier[i]) {
+            dwRectifier_release(m_rectifier[i]);
+            m_rectifier[i] = DW_NULL_HANDLE;
+        }
+        if (m_cameraModelIn[i]) {
+            dwCameraModel_release(m_cameraModelIn[i]);
+            m_cameraModelIn[i] = DW_NULL_HANDLE;
+        }
+        if (m_rectifiedImage[i]) {
+            dwImage_destroy(m_rectifiedImage[i]);
+            m_rectifiedImage[i] = DW_NULL_HANDLE;
+        }
+#ifdef VIBRANTE
+        // Release LDC input image pool
+        for (uint32_t j = 0; j < LDC_INPUT_POOL_SIZE; ++j) {
+            if (m_ldcInputImages[i][j]) {
+                dwImage_destroy(m_ldcInputImages[i][j]);
+                m_ldcInputImages[i][j] = DW_NULL_HANDLE;
+            }
+        }
+        // Release intermediate NVMedia RGBA buffer
+        if (m_nvmediaRGBA[i]) {
+            dwImage_destroy(m_nvmediaRGBA[i]);
+            m_nvmediaRGBA[i] = DW_NULL_HANDLE;
+        }
+        // Release NVMedia→CUDA streamer
+        if (m_streamerNvmToCuda[i]) {
+            dwImageStreamer_release(m_streamerNvmToCuda[i]);
+            m_streamerNvmToCuda[i] = DW_NULL_HANDLE;
+        }
+#endif
+    }
+    if (m_cameraModelOut) {
+        dwCameraModel_release(m_cameraModelOut);
+        m_cameraModelOut = DW_NULL_HANDLE;
+    }
+    std::cout << "[Rectifier] Released rectification resources\n";
+
+    // Release shared DNNs (segmentation and detection)
     if (m_dnn) dwDNN_release(m_dnn);
     if (m_detDnn) dwDNN_release(m_detDnn);
-    if (m_stage2Dnn) dwDNN_release(m_stage2Dnn);
-
+    
+    // Release per-camera Stage 2 DNNs 
     for (uint32_t i = 0; i < m_numCameras; ++i) {
-        if (m_imgRGBA[i]) dwImage_destroy(m_imgRGBA[i]);
-        if (m_cam[i]) dwSAL_releaseSensor(m_cam[i]);
+        if (m_stage2Dnn[i]) {
+            dwDNN_release(m_stage2Dnn[i]);
+            m_stage2Dnn[i] = DW_NULL_HANDLE;
+        }
     }
 
     if (m_rig) dwRig_release(m_rig);
@@ -587,6 +659,7 @@ void DriveSeg4CamServer::release()
 
     std::cout << "[Server] Released.\n";
 }
+
 
 void DriveSeg4CamServer::run()
 {
@@ -643,6 +716,151 @@ void DriveSeg4CamServer::initCameras()
         m_roi[i] = {0, 0, (int32_t)rgbaProps.width, (int32_t)rgbaProps.height};
         CHECK_DW_ERROR(dwImage_create(&m_imgRGBA[i], rgbaProps, m_ctx));
     }
+}
+
+void DriveSeg4CamServer::initRectifiers()
+{
+    std::cout << "[Rectifier] Initializing rectification...\n";
+
+    // Get image properties from first camera
+    dwImageProperties imgProps{};
+    CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&imgProps, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, m_cam[0]));
+
+    const uint32_t width = imgProps.width;
+    const uint32_t height = imgProps.height;
+
+    std::cout << "[Rectifier] Image size: " << width << "x" << height << "\n";
+
+    // Create output pinhole camera model (rectified - no distortion)
+    // Parameters calculated from rig ftheta model: f = 1/bw_poly[1] = 1867.91
+    dwPinholeCameraConfig pinholeConf{};
+    pinholeConf.width = width;
+    pinholeConf.height = height;
+    pinholeConf.u0 = 1927.764404f;      // cx from rig (ftheta principal point)
+    pinholeConf.v0 = 1096.686646f;      // cy from rig (ftheta principal point)
+    pinholeConf.focalX = 1867.9131f;    // f = 1/bw_poly[1], calculated from ftheta
+    pinholeConf.focalY = 1867.9131f;    // f = 1/bw_poly[1], calculated from ftheta
+    pinholeConf.distortion[0] = 0.0f;   // No distortion in rectified output
+    pinholeConf.distortion[1] = 0.0f;
+    pinholeConf.distortion[2] = 0.0f;
+    pinholeConf.polynomialType = DW_PINHOLE_CAMERA_POLYNOMIAL_TYPE_FORWARD;
+
+    CHECK_DW_ERROR(dwCameraModel_initializePinhole(&m_cameraModelOut, &pinholeConf, m_ctx));
+    std::cout << "[Rectifier] Output pinhole camera model created\n";
+
+#if 0  // LDC disabled - using GPU rectification instead (TODO: fix LDC YUV→RGBA conversion)
+    // Use LDC hardware on VIBRANTE platforms
+    m_useLDC = true;
+    std::cout << "[Rectifier] Using LDC hardware acceleration (VIBRANTE)\n";
+
+    for (uint32_t i = 0; i < m_numCameras; ++i) {
+        // Find sensor index in rig
+        uint32_t sensorIdx = 0;
+        CHECK_DW_ERROR(dwRig_findSensorByTypeIndex(&sensorIdx, DW_SENSOR_CAMERA, i, m_rig));
+
+        // Initialize input camera model from rig (contains fisheye/ftheta calibration)
+        CHECK_DW_ERROR(dwCameraModel_initialize(&m_cameraModelIn[i], sensorIdx, m_rig));
+        std::cout << "[Rectifier] Input camera model loaded from rig for camera " << i << "\n";
+
+        // Initialize rectifier with input and output camera models
+        CHECK_DW_ERROR(dwRectifier_initialize(&m_rectifier[i], m_cameraModelIn[i], m_cameraModelOut, m_ctx));
+        std::cout << "[Rectifier] Rectifier initialized for camera " << i << "\n";
+
+        // ========================================
+        // Create and register OUTPUT images (rectified)
+        // ========================================
+        dwImageProperties rectProps{};
+        rectProps.type = DW_IMAGE_NVMEDIA;
+        rectProps.format = DW_IMAGE_FORMAT_YUV420_UINT8_SEMIPLANAR;
+        rectProps.width = width;
+        rectProps.height = height;
+        rectProps.memoryLayout = DW_IMAGE_MEMORY_TYPE_PITCH;
+
+        // Append LDC allocation attributes for output
+        CHECK_DW_ERROR(dwRectifier_appendAllocationAttributes(&rectProps, m_rectifier[i]));
+        CHECK_DW_ERROR(dwImage_create(&m_rectifiedImage[i], rectProps, m_ctx));
+
+        // Register rectified output image pool
+        dwImagePool outputPool{};
+        outputPool.images = &m_rectifiedImage[i];
+        outputPool.imageCount = 1;
+        CHECK_DW_ERROR(dwRectifier_registerImages(outputPool, m_rectifier[i]));
+        std::cout << "[Rectifier] LDC output image registered for camera " << i << "\n";
+
+        // ========================================
+        // Create and register INPUT images (camera)
+        // ========================================
+        dwImageProperties inputProps{};
+        CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&inputProps, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, m_cam[i]));
+
+        // Append allocation attributes from both sensor and rectifier
+        CHECK_DW_ERROR(dwSensorCamera_appendAllocationAttributes(&inputProps, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, m_cam[i]));
+        CHECK_DW_ERROR(dwRectifier_appendAllocationAttributes(&inputProps, m_rectifier[i]));
+
+        // Create input image pool
+        for (uint32_t j = 0; j < LDC_INPUT_POOL_SIZE; ++j) {
+            CHECK_DW_ERROR(dwImage_create(&m_ldcInputImages[i][j], inputProps, m_ctx));
+        }
+
+        // Register input image pool with rectifier
+        dwImagePool inputPool{};
+        inputPool.images = m_ldcInputImages[i];
+        inputPool.imageCount = LDC_INPUT_POOL_SIZE;
+        CHECK_DW_ERROR(dwRectifier_registerImages(inputPool, m_rectifier[i]));
+
+        // Set the image pool on the camera sensor
+        CHECK_DW_ERROR(dwSensorCamera_setImagePool(inputPool, m_cam[i]));
+        std::cout << "[Rectifier] LDC input image pool (" << LDC_INPUT_POOL_SIZE << " images) registered for camera " << i << "\n";
+
+        // ========================================
+        // Create intermediate NVMedia RGBA for conversion to CUDA
+        // NVMedia YUV → NVMedia RGBA → CUDA RGBA (via streamer)
+        // ========================================
+        dwImageProperties rgbaProps{};
+        rgbaProps.type = DW_IMAGE_NVMEDIA;
+        rgbaProps.format = DW_IMAGE_FORMAT_RGBA_UINT8;
+        rgbaProps.width = width;
+        rgbaProps.height = height;
+        rgbaProps.memoryLayout = DW_IMAGE_MEMORY_TYPE_PITCH;
+        CHECK_DW_ERROR(dwImage_create(&m_nvmediaRGBA[i], rgbaProps, m_ctx));
+        std::cout << "[Rectifier] Intermediate NVMedia RGBA buffer created for camera " << i << "\n";
+
+        // Create NVMedia → CUDA streamer for final conversion
+        CHECK_DW_ERROR(dwImageStreamer_initialize(&m_streamerNvmToCuda[i], &rgbaProps, DW_IMAGE_CUDA, m_ctx));
+        std::cout << "[Rectifier] NVMedia→CUDA streamer created for camera " << i << "\n";
+    }
+
+    std::cout << "[Rectifier] LDC hardware rectification initialization complete\n";
+
+#else
+    // Use GPU-based rectification on non-VIBRANTE platforms
+    m_useLDC = false;
+    std::cout << "[Rectifier] Using GPU-based rectification\n";
+
+    for (uint32_t i = 0; i < m_numCameras; ++i) {
+        // Find sensor index in rig
+        uint32_t sensorIdx = 0;
+        CHECK_DW_ERROR(dwRig_findSensorByTypeIndex(&sensorIdx, DW_SENSOR_CAMERA, i, m_rig));
+
+        // Initialize input camera model from rig (contains fisheye/ftheta calibration)
+        CHECK_DW_ERROR(dwCameraModel_initialize(&m_cameraModelIn[i], sensorIdx, m_rig));
+        std::cout << "[Rectifier] Input camera model loaded from rig for camera " << i << "\n";
+
+        // Initialize rectifier with input and output camera models
+        CHECK_DW_ERROR(dwRectifier_initialize(&m_rectifier[i], m_cameraModelIn[i], m_cameraModelOut, m_ctx));
+        std::cout << "[Rectifier] Rectifier initialized for camera " << i << "\n";
+
+        // Create CUDA image for GPU-based rectification
+        dwImageProperties rectProps = imgProps;
+        CHECK_DW_ERROR(dwImage_create(&m_rectifiedImage[i], rectProps, m_ctx));
+        std::cout << "[Rectifier] GPU rectified image buffer created for camera " << i << "\n";
+    }
+
+    std::cout << "[Rectifier] GPU rectification initialization complete\n";
+#endif
+
+    m_rectificationEnabled = true;
+    std::cout << "[Rectifier] Rectification initialization complete for " << m_numCameras << " cameras\n";
 }
 
 void DriveSeg4CamServer::initDNN()
@@ -735,7 +953,7 @@ void DriveSeg4CamServer::initStage2DNN()
     uint32_t dlaEngine = (uint32_t)std::atoi(m_args.get("dla-engine").c_str());
 #endif
 
-    // 2. Load the model (NO JSON metadata needed - we handle preprocessing manually)
+    // 2. Load the model
     std::string stage2Path = m_args.get("stage2_model");
     if (stage2Path.empty()) {
         stage2Path = dw_samples::SamplesDataPath::get() + std::string("/samples/detector/");
@@ -745,56 +963,61 @@ void DriveSeg4CamServer::initStage2DNN()
     
     std::cout << "[DNN] Loading Stage 2 (3D detection) model: " << stage2Path << "\n";
 
+    // Load model for first camera (we'll query properties from this)
 #ifdef VIBRANTE
     CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFileWithEngineId(
-        &m_stage2Dnn, stage2Path.c_str(), nullptr,
+        &m_stage2Dnn[0], stage2Path.c_str(), nullptr,
         useDLA ? DW_PROCESSOR_TYPE_CUDLA : DW_PROCESSOR_TYPE_GPU,
         useDLA ? (int32_t)dlaEngine : 0, m_ctx));
 #else
     CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFile(
-        &m_stage2Dnn, stage2Path.c_str(), nullptr, DW_PROCESSOR_TYPE_GPU, m_ctx));
+        &m_stage2Dnn[0], stage2Path.c_str(), nullptr, DW_PROCESSOR_TYPE_GPU, m_ctx));
 #endif
 
-    // 3. Get input/output properties
-    CHECK_DW_ERROR(dwDNN_getInputTensorProperties(&m_stage2InPropsImage, 0, m_stage2Dnn));
-    CHECK_DW_ERROR(dwDNN_getInputTensorProperties(&m_stage2InPropsBoxes, 1, m_stage2Dnn));
+    // Get actual output count and store it
+    CHECK_DW_ERROR(dwDNN_getOutputBlobCount(&m_stage2OutputCount, m_stage2Dnn[0]));
+    std::cout << "[DNN] Stage 2 has " << m_stage2OutputCount << " outputs\n";
     
-    for (uint32_t i = 0; i < 7; ++i) {
-        CHECK_DW_ERROR(dwDNN_getOutputTensorProperties(&m_stage2OutProps[i], i, m_stage2Dnn));
+    if (m_stage2OutputCount > 7) {
+        std::cout << "[DNN] WARNING: Stage 2 has more outputs than expected, clamping to 7\n";
+        m_stage2OutputCount = 7;
+    }
+
+    // Get input properties
+    dwDNNTensorProperties imgProps{};
+    CHECK_DW_ERROR(dwDNN_getInputTensorProperties(&imgProps, 0, m_stage2Dnn[0]));
+    
+    dwDNNTensorProperties boxProps{};
+    CHECK_DW_ERROR(dwDNN_getInputTensorProperties(&boxProps, 1, m_stage2Dnn[0]));
+    
+    m_stage2InPropsImage = imgProps;
+    m_stage2InPropsBoxes = boxProps;
+    
+    // Get output properties - only for actual outputs
+    for (uint32_t i = 0; i < m_stage2OutputCount; ++i) {
+        CHECK_DW_ERROR(dwDNN_getOutputTensorProperties(&m_stage2OutProps[i], i, m_stage2Dnn[0]));
     }
     
-    // 4. Debug: Print tensor shapes
-    std::cout << "\n========== STAGE 2 TENSOR INSPECTION ==========\n";
-    
-    std::cout << "Input 0 (images):\n";
-    std::cout << "  numDimensions: " << m_stage2InPropsImage.numDimensions << "\n";
-    std::cout << "  tensorLayout: " << m_stage2InPropsImage.tensorLayout << "\n";
-    std::cout << "  dataType: " << m_stage2InPropsImage.dataType << "\n";
-    for (uint32_t i = 0; i < m_stage2InPropsImage.numDimensions; ++i) {
-        std::cout << "  dimensionSize[" << i << "]: " << m_stage2InPropsImage.dimensionSize[i] << "\n";
+    // Load model for remaining cameras
+    for (uint32_t i = 1; i < m_numCameras; ++i) {
+#ifdef VIBRANTE
+        CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFileWithEngineId(
+            &m_stage2Dnn[i], stage2Path.c_str(), nullptr,
+            useDLA ? DW_PROCESSOR_TYPE_CUDLA : DW_PROCESSOR_TYPE_GPU,
+            useDLA ? (int32_t)dlaEngine : 0, m_ctx));
+#else
+        CHECK_DW_ERROR(dwDNN_initializeTensorRTFromFile(
+            &m_stage2Dnn[i], stage2Path.c_str(), nullptr, DW_PROCESSOR_TYPE_GPU, m_ctx));
+#endif
+        std::cout << "[DNN] Stage 2 model initialized for camera " << i << "\n";
     }
     
-    std::cout << "\nInput 1 (boxes_2d):\n";
-    std::cout << "  numDimensions: " << m_stage2InPropsBoxes.numDimensions << "\n";
-    std::cout << "  tensorLayout: " << m_stage2InPropsBoxes.tensorLayout << "\n";
-    std::cout << "  dataType: " << m_stage2InPropsBoxes.dataType << "\n";
-    for (uint32_t i = 0; i < m_stage2InPropsBoxes.numDimensions; ++i) {
-        std::cout << "  dimensionSize[" << i << "]: " << m_stage2InPropsBoxes.dimensionSize[i] << "\n";
-    }
-    
-    for (uint32_t i = 0; i < 7; ++i) {
-        std::cout << "\nOutput " << i << ":\n";
-        std::cout << "  numDimensions: " << m_stage2OutProps[i].numDimensions << "\n";
-        for (uint32_t j = 0; j < m_stage2OutProps[i].numDimensions; ++j) {
-            std::cout << "  dimensionSize[" << j << "]: " << m_stage2OutProps[i].dimensionSize[j] << "\n";
-        }
-    }
-    
-    std::cout << "===============================================\n\n";
-    
-    std::cout << "[DNN] Stage 2 (3D detection) initialized\n";
+    std::cout << "[DNN] Stage 2 (3D detection) initialization complete\n";
     std::cout << "  Max boxes: " << STAGE2_MAX_BOXES << "\n";
+    std::cout << "  Output count: " << m_stage2OutputCount << "\n";
 }
+
+
 
 
 void DriveSeg4CamServer::initPerCameraDNN(uint32_t i)
@@ -849,31 +1072,15 @@ void DriveSeg4CamServer::initPerCameraStage2(uint32_t i)
     cudaStreamCreate(&c.stage2Stream);
     cudaEventCreate(&c.stage2InferDone);
     
-    std::cout << "[Stage2 Init Cam " << i << "] Creating tensors...\n";
+    // NO tensors, NO DataConditioner, NO streamers
+    // Using dwDNN_inferRaw with raw GPU buffers
     
-    // NO DATA CONDITIONER - we handle preprocessing manually via CUDA kernel
-    // Create input tensors directly
-    CHECK_DW_ERROR(dwDNNTensor_create(&c.stage2InTensorImage, &m_stage2InPropsImage, m_ctx));
-    CHECK_DW_ERROR(dwDNNTensor_create(&c.stage2InTensorBoxes, &m_stage2InPropsBoxes, m_ctx));
-    
-    // Create output tensors (device)
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensor_create(&c.stage2OutTensorsDev[j], &m_stage2OutProps[j], m_ctx));
-        
-        // Create streamers (device → host)
-        dwDNNTensorProperties hostProps = m_stage2OutProps[j];
-        hostProps.tensorType = DW_DNN_TENSOR_TYPE_CPU;
-        CHECK_DW_ERROR(dwDNNTensorStreamer_initialize(
-            &c.stage2OutStreamers[j], &m_stage2OutProps[j], hostProps.tensorType, m_ctx));
-    }
-    
-    // Reserve space for results
     c.depths.reserve(STAGE2_MAX_BOXES);
     c.dimensions.reserve(STAGE2_MAX_BOXES * 3);
     c.rotations.reserve(STAGE2_MAX_BOXES);
     c.iouScores.reserve(STAGE2_MAX_BOXES);
     
-    std::cout << "[Stage2] Per-camera context initialized for cam " << i << "\n";
+    std::cout << "[Stage2] Per-camera context initialized for cam " << i << " (using inferRaw)\n";
 }
 
 
@@ -1000,15 +1207,48 @@ void DriveSeg4CamServer::startAllInferences(dwCameraFrameHandle_t frames[])
         if (!c.detRunning) {
             try {
                 c.detStartTime = std::chrono::high_resolution_clock::now();
-                
-                dwImageHandle_t src = DW_NULL_HANDLE;
-                CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frames[i]));
-                CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
-                
+
+                // Apply rectification if enabled
+                if (m_rectificationEnabled && m_rectifier[i] != DW_NULL_HANDLE) {
+#if 0  // LDC disabled
+                    // LDC hardware: use native processed image as input
+                    dwImageHandle_t srcNative = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwSensorCamera_getImage(&srcNative, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frames[i]));
+
+                    // Rectify using LDC: srcNative (NVMedia YUV) -> m_rectifiedImage (NVMedia YUV)
+                    CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], srcNative, nullptr, m_rectifier[i]));
+
+                    // Step 1: NVMedia YUV → NVMedia RGBA
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_nvmediaRGBA[i], m_rectifiedImage[i], m_ctx));
+
+                    // Step 2: NVMedia RGBA → CUDA RGBA via streamer
+                    CHECK_DW_ERROR(dwImageStreamer_producerSend(m_nvmediaRGBA[i], m_streamerNvmToCuda[i]));
+                    dwImageHandle_t convergenceImage = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwImageStreamer_consumerReceive(&convergenceImage, 33000, m_streamerNvmToCuda[i]));
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], convergenceImage, m_ctx));
+                    CHECK_DW_ERROR(dwImageStreamer_consumerReturn(&convergenceImage, m_streamerNvmToCuda[i]));
+                    CHECK_DW_ERROR(dwImageStreamer_producerReturn(nullptr, 33000, m_streamerNvmToCuda[i]));
+#else
+                    // GPU rectification: use CUDA RGBA as input
+                    dwImageHandle_t src = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frames[i]));
+
+                    // Rectify: src (distorted) -> m_rectifiedImage (undistorted)
+                    CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], src, nullptr, m_rectifier[i]));
+                    // Copy rectified image to working buffer
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], m_rectifiedImage[i], m_ctx));
+#endif
+                } else {
+                    // No rectification - use raw image
+                    dwImageHandle_t src = DW_NULL_HANDLE;
+                    CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frames[i]));
+                    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
+                }
+
                 CHECK_DW_ERROR(dwDataConditioner_prepareData(
-                    c.detInTensor, &m_imgRGBA[i], 1, &m_roi[i], 
+                    c.detInTensor, &m_imgRGBA[i], 1, &m_roi[i],
                     cudaAddressModeClamp, c.detConditioner));
-                
+
                 runDetectionInference(i);
                 c.detRunning = true;
             } catch (const std::exception& e) {
@@ -1035,9 +1275,24 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
 {
     auto &c = m_dnnCtx[i];
     
+    // Check Stage 2 completion FIRST (before starting new one)
+    if (c.stage2Running && cudaEventQuery(c.stage2InferDone) == cudaSuccess) {
+        collectStage2Results(i);
+        
+        auto endTime = std::chrono::high_resolution_clock::now();
+        float ms = std::chrono::duration<float, std::milli>(endTime - c.stage2StartTime).count();
+        c.avgStage2Ms = (c.avgStage2Ms * c.stage2Count + ms) / (c.stage2Count + 1);
+        
+        c.stage2Running = false;
+        c.stage2Count++;
+        
+        std::cout << "[Cam" << i << "] Stage 2 complete: " 
+                  << c.depths.size() << " 3D predictions in " << ms << "ms\n";
+    }
+    
     // Check segmentation
     if (c.segRunning && cudaEventQuery(c.segInferDone) == cudaSuccess) {
-        collectAndOverlay(i);  // ← Image now has segmentation overlay
+        collectAndOverlay(i);
         
         auto endTime = std::chrono::high_resolution_clock::now();
         float ms = std::chrono::duration<float, std::milli>(endTime - c.segStartTime).count();
@@ -1046,7 +1301,6 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
         c.segRunning = false;
         c.segCount++;
         m_recentInferences++;
-        
         
         SerializableFrame frameData = extractFrameData(i);
         {
@@ -1058,7 +1312,7 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
         }
     }
     
-    // Check detection (unchanged)
+    // Check 2D detection - only start Stage 2 if NOT already running
     if (c.detRunning && cudaEventQuery(c.detInferDone) == cudaSuccess) {
         collectDetectionResults(i);
         
@@ -1078,6 +1332,17 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
         
         c.detRunning = false;
         c.detCount++;
+        
+        // Only start Stage 2 if we have boxes AND Stage 2 is not already running
+        if (!c.detBoxes.empty() && !c.stage2Running) {
+            c.stage2StartTime = std::chrono::high_resolution_clock::now();
+            try {
+                runStage2Inference(i);
+                c.stage2Running = true;
+            } catch (const std::exception& e) {
+                std::cout << "[Cam" << i << "] Stage 2 inference failed: " << e.what() << "\n";
+            }
+        }
     }
 
     if (c.stage2Running && cudaEventQuery(c.stage2InferDone) == cudaSuccess) {
@@ -1098,9 +1363,42 @@ void DriveSeg4CamServer::maybeCollect(uint32_t i)
 
 void DriveSeg4CamServer::prepareInput(uint32_t i, dwCameraFrameHandle_t frame)
 {
-    dwImageHandle_t src = DW_NULL_HANDLE;
-    CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frame));
-    CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
+    // Apply rectification if enabled
+    if (m_rectificationEnabled && m_rectifier[i] != DW_NULL_HANDLE) {
+#if 0  // LDC disabled
+        // LDC hardware: use native processed image as input
+        dwImageHandle_t srcNative = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwSensorCamera_getImage(&srcNative, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
+
+        // Rectify using LDC: srcNative (NVMedia YUV) -> m_rectifiedImage (NVMedia YUV)
+        CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], srcNative, nullptr, m_rectifier[i]));
+
+        // Step 1: NVMedia YUV → NVMedia RGBA
+        CHECK_DW_ERROR(dwImage_copyConvert(m_nvmediaRGBA[i], m_rectifiedImage[i], m_ctx));
+
+        // Step 2: NVMedia RGBA → CUDA RGBA via streamer
+        CHECK_DW_ERROR(dwImageStreamer_producerSend(m_nvmediaRGBA[i], m_streamerNvmToCuda[i]));
+        dwImageHandle_t convergenceImage = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwImageStreamer_consumerReceive(&convergenceImage, 33000, m_streamerNvmToCuda[i]));
+        CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], convergenceImage, m_ctx));
+        CHECK_DW_ERROR(dwImageStreamer_consumerReturn(&convergenceImage, m_streamerNvmToCuda[i]));
+        CHECK_DW_ERROR(dwImageStreamer_producerReturn(nullptr, 33000, m_streamerNvmToCuda[i]));
+#else
+        // GPU rectification: use CUDA RGBA as input
+        dwImageHandle_t src = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frame));
+
+        // Rectify: src (distorted) -> m_rectifiedImage (undistorted)
+        CHECK_DW_ERROR(dwRectifier_apply(m_rectifiedImage[i], src, nullptr, m_rectifier[i]));
+        // Copy rectified image to working buffer
+        CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], m_rectifiedImage[i], m_ctx));
+#endif
+    } else {
+        // No rectification - use raw image
+        dwImageHandle_t src = DW_NULL_HANDLE;
+        CHECK_DW_ERROR(dwSensorCamera_getImage(&src, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frame));
+        CHECK_DW_ERROR(dwImage_copyConvert(m_imgRGBA[i], src, m_ctx));
+    }
 
     auto &c = m_dnnCtx[i];
     CHECK_DW_ERROR(dwDataConditioner_prepareData(
@@ -1136,74 +1434,151 @@ void DriveSeg4CamServer::runStage2Inference(uint32_t i)
 {
     auto &c = m_dnnCtx[i];
     
-    // ========== 1. PREPARE BOXES_2D TENSOR ==========
+    // ========== RESET DNN ==========
+    CHECK_DW_ERROR(dwDNN_reset(m_stage2Dnn[i]));
+    CHECK_DW_ERROR(dwDNN_setCUDAStream(c.stage2Stream, m_stage2Dnn[i]));
+    
+    // ========== GET ORIGINAL IMAGE ==========
+    dwImageCUDA* cudaImg{};
+    CHECK_DW_ERROR(dwImage_getCUDA(&cudaImg, m_imgRGBA[i]));
+    const uint32_t origWidth = cudaImg->prop.width;
+    const uint32_t origHeight = cudaImg->prop.height;
+    const uint32_t origPitch = cudaImg->pitch[0];
+    uint8_t* d_rgba = reinterpret_cast<uint8_t*>(cudaImg->dptr[0]);
+    
+    const uint32_t stage2Width = 640;
+    const uint32_t stage2Height = 640;
+    
+    // ========== 1. ALLOCATE RAW GPU BUFFERS (once) ==========
+    // These are raw float* buffers, not DW tensors
+    static float* d_inputImage = nullptr;      // [1, 3, 640, 640]
+    static float* d_inputBoxes = nullptr;      // [100, 5]
+    static float* d_outputDepth = nullptr;     // [100, 3]
+    static float* d_outputDims = nullptr;      // [100, 3]
+    static float* d_outputRotBins = nullptr;   // [100, 12]
+    static float* d_outputRotRes = nullptr;    // [100, 12]
+    static uint8_t* d_resizedRGBA = nullptr;   // Temporary for resize
+    
+
+    // Allocate host buffers (static to avoid repeated allocation)
+    static std::vector<float> h_depth(STAGE2_MAX_BOXES * 3);
+    static std::vector<float> h_dims(STAGE2_MAX_BOXES * 3);
+    static std::vector<float> h_rotBins(STAGE2_MAX_BOXES * 12);
+    static std::vector<float> h_rotRes(STAGE2_MAX_BOXES * 12);
+
+
+    if (!d_inputImage) {
+        cudaMalloc(&d_inputImage, 1 * 3 * stage2Height * stage2Width * sizeof(float));
+        cudaMalloc(&d_inputBoxes, STAGE2_MAX_BOXES * 5 * sizeof(float));
+        cudaMalloc(&d_outputDepth, STAGE2_MAX_BOXES * 3 * sizeof(float));
+        cudaMalloc(&d_outputDims, STAGE2_MAX_BOXES * 3 * sizeof(float));
+        cudaMalloc(&d_outputRotBins, STAGE2_MAX_BOXES * 12 * sizeof(float));
+        cudaMalloc(&d_outputRotRes, STAGE2_MAX_BOXES * 12 * sizeof(float));
+        cudaMalloc(&d_resizedRGBA, stage2Width * stage2Height * 4);
+        std::cout << "[Stage2] Allocated raw GPU buffers\n";
+    }
+    
+    // ========== 2. PREPROCESS IMAGE (CUDA kernels) ==========
+    float scaleX = (float)origWidth / stage2Width;
+    float scaleY = (float)origHeight / stage2Height;
+    
+    dim3 block(16, 16);
+    dim3 grid((stage2Width + 15) / 16, (stage2Height + 15) / 16);
+    
+    // Resize to 640x640
+    downscaleKernel<<<grid, block, 0, c.stage2Stream>>>(
+        d_resizedRGBA, d_rgba,
+        stage2Width, stage2Height,
+        origWidth, origHeight,
+        origPitch,
+        scaleX, scaleY
+    );
+    
+    // Normalize with ImageNet stats → NCHW float
+    const float meanR = 0.485f, meanG = 0.456f, meanB = 0.406f;
+    const float stdR = 0.229f, stdG = 0.224f, stdB = 0.225f;
+    
+    preprocessImageForStage2<<<grid, block, 0, c.stage2Stream>>>(
+        d_inputImage, d_resizedRGBA,
+        stage2Width, stage2Height, stage2Width * 4,
+        meanR, meanG, meanB,
+        stdR, stdG, stdB
+    );
+    
+    // ========== 3. PREPARE BOXES ==========
     std::vector<float> boxesData(STAGE2_MAX_BOXES * 5, 0.0f);
     size_t numActualBoxes = std::min<size_t>(c.detBoxes.size(), STAGE2_MAX_BOXES);
     
     for (size_t j = 0; j < numActualBoxes; ++j) {
         const auto& box = c.detBoxes[j];
-        boxesData[j * 5 + 0] = 0.0f;                    // batch_idx = 0
-        boxesData[j * 5 + 1] = box.x;                   // x1
-        boxesData[j * 5 + 2] = box.y;                   // y1
-        boxesData[j * 5 + 3] = box.x + box.width;       // x2
-        boxesData[j * 5 + 4] = box.y + box.height;      // y2
+        
+        // Convert original coords → 640×640 stretched coords
+        float x1 = (box.x / origWidth) * stage2Width;
+        float y1 = (box.y / origHeight) * stage2Height;
+        float x2 = ((box.x + box.width) / origWidth) * stage2Width;
+        float y2 = ((box.y + box.height) / origHeight) * stage2Height;
+        
+        // Clamp
+        x1 = std::max(0.0f, std::min(x1, (float)stage2Width - 1.0f));
+        y1 = std::max(0.0f, std::min(y1, (float)stage2Height - 1.0f));
+        x2 = std::max(x1 + 1.0f, std::min(x2, (float)stage2Width));
+        y2 = std::max(y1 + 1.0f, std::min(y2, (float)stage2Height));
+        
+        boxesData[j * 5 + 0] = 0.0f;  // batch_idx
+        boxesData[j * 5 + 1] = x1;
+        boxesData[j * 5 + 2] = y1;
+        boxesData[j * 5 + 3] = x2;
+        boxesData[j * 5 + 4] = y2;
     }
     
     // Copy boxes to GPU
-    void* boxPtr = nullptr;
-    CHECK_DW_ERROR(dwDNNTensor_lock(&boxPtr, c.stage2InTensorBoxes));
-    cudaMemcpyAsync(boxPtr, boxesData.data(), 
+    cudaMemcpyAsync(d_inputBoxes, boxesData.data(),
                     STAGE2_MAX_BOXES * 5 * sizeof(float),
                     cudaMemcpyHostToDevice, c.stage2Stream);
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2InTensorBoxes));
     
-    // ========== 2. PREPARE IMAGE TENSOR (MANUAL PREPROCESSING) ==========
+    // ========== 4. SYNCHRONIZE BEFORE INFERENCE ==========
+    cudaStreamSynchronize(c.stage2Stream);
     
-    // Get source RGBA image
-    dwImageCUDA* cudaImg = nullptr;
-    CHECK_DW_ERROR(dwImage_getCUDA(&cudaImg, m_imgRGBA[i]));
+    // ========== 5. RUN INFERENCE WITH dwDNN_inferRaw ==========
+    // Input pointers array
+    const float* inputPtrs[2] = { d_inputImage, d_inputBoxes };
     
-    // Get Stage 2 expected dimensions (NCHW layout)
-    const uint32_t dstW = m_stage2InPropsImage.dimensionSize[0]; // W
-    const uint32_t dstH = m_stage2InPropsImage.dimensionSize[1]; // H
-    const uint32_t dstC = m_stage2InPropsImage.dimensionSize[2]; // C (should be 3)
+    // Output pointers array
+    float* outputPtrs[4] = { d_outputDepth, d_outputDims, d_outputRotBins, d_outputRotRes };
     
-    std::cout << "[Stage2 Cam " << i << "] Preprocessing image: "
-              << cudaImg->prop.width << "x" << cudaImg->prop.height 
-              << " → " << dstW << "x" << dstH << "\n";
+    CHECK_DW_ERROR(dwDNN_inferRaw(
+        outputPtrs,           // float* const* const dOutput
+        inputPtrs,            // const float* const* const dInput
+        1,                    // batchsize
+        m_stage2Dnn[i]        // network
+    ));
     
-    // Lock output tensor
-    void* imagePtr = nullptr;
-    CHECK_DW_ERROR(dwDNNTensor_lock(&imagePtr, c.stage2InTensorImage));
+    // ========== 6. COPY OUTPUTS TO HOST ==========
     
-    // Run preprocessing kernel: RGBA uint8 → RGB float32 normalized
-    dim3 block(16, 16);
-    dim3 grid((dstW + 15) / 16, (dstH + 15) / 16);
+    cudaMemcpyAsync(h_depth.data(), d_outputDepth, 
+                    STAGE2_MAX_BOXES * 3 * sizeof(float),
+                    cudaMemcpyDeviceToHost, c.stage2Stream);
+    cudaMemcpyAsync(h_dims.data(), d_outputDims,
+                    STAGE2_MAX_BOXES * 3 * sizeof(float),
+                    cudaMemcpyDeviceToHost, c.stage2Stream);
+    cudaMemcpyAsync(h_rotBins.data(), d_outputRotBins,
+                    STAGE2_MAX_BOXES * 12 * sizeof(float),
+                    cudaMemcpyDeviceToHost, c.stage2Stream);
+    cudaMemcpyAsync(h_rotRes.data(), d_outputRotRes,
+                    STAGE2_MAX_BOXES * 12 * sizeof(float),
+                    cudaMemcpyDeviceToHost, c.stage2Stream);
     
-    preprocessImageForStage2<<<grid, block, 0, c.stage2Stream>>>(
-        reinterpret_cast<float*>(imagePtr),              // Output: [1, 3, H, W] float32
-        reinterpret_cast<uint8_t*>(cudaImg->dptr[0]),    // Input: RGBA uint8
-        dstW, dstH, cudaImg->pitch[0],
-        0.485f, 0.456f, 0.406f,  // ImageNet means (R, G, B)
-        0.229f, 0.224f, 0.225f   // ImageNet stds (R, G, B)
-    );
     
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2InTensorImage));
-    
-    // ========== 3. RUN INFERENCE ==========
-    CHECK_DW_ERROR(dwDNN_setCUDAStream(c.stage2Stream, m_stage2Dnn));
-    
-    dwConstDNNTensorHandle_t inputs[2] = {c.stage2InTensorImage, c.stage2InTensorBoxes};
-    CHECK_DW_ERROR(dwDNN_infer(c.stage2OutTensorsDev, 7, inputs, 2, m_stage2Dnn));
-    
-    // ========== 4. STREAM OUTPUTS TO HOST ==========
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensorStreamer_producerSend(
-            c.stage2OutTensorsDev[j], c.stage2OutStreamers[j]));
-    }
-    
+    // Store host pointers for collectStage2Results to use
+    c.stage2HostDepth = h_depth.data();
+    c.stage2HostDims = h_dims.data();
+    c.stage2HostRotBins = h_rotBins.data();
+    c.stage2HostRotRes = h_rotRes.data();
+
     cudaEventRecord(c.stage2InferDone, c.stage2Stream);
 }
+
+
 
 
 void DriveSeg4CamServer::collectAndOverlay(uint32_t i)
@@ -1278,7 +1653,6 @@ void DriveSeg4CamServer::collectAndOverlay(uint32_t i)
     cudaFree(d_logits);
     cudaFree(d_classMap);
 }
-
 void DriveSeg4CamServer::collectDetectionResults(uint32_t i)
 {
     auto &c = m_dnnCtx[i];
@@ -1291,6 +1665,7 @@ void DriveSeg4CamServer::collectDetectionResults(uint32_t i)
     std::lock_guard<std::mutex> lock(c.detMutex);
     c.detBoxes.clear();
     c.detLabels.clear();
+    c.detBoxes640.clear();  // NEW: boxes in 640×640 YOLO output space
 
     std::vector<YoloScoreRect> tmpRes;
     size_t offsetY, strideY, height;
@@ -1314,24 +1689,29 @@ void DriveSeg4CamServer::collectDetectionResults(uint32_t i)
         
         if (maxScore < 0.25f) continue;
         
+        // Raw YOLO output (in 640×640 network output space)
         float32_t imageX = detection[0];
         float32_t imageY = detection[1];
         float32_t bboxW  = detection[2];
         float32_t bboxH  = detection[3];
 
-        float32_t boxX1Tmp = imageX - 0.5f * bboxW;
-        float32_t boxY1Tmp = imageY - 0.5f * bboxH;
-        float32_t boxX2Tmp = imageX + 0.5f * bboxW;
-        float32_t boxY2Tmp = imageY + 0.5f * bboxH;
+        // Box in YOLO 640×640 output space (center format → corner format)
+        float32_t boxX1_640 = imageX - 0.5f * bboxW;
+        float32_t boxY1_640 = imageY - 0.5f * bboxH;
+        float32_t boxX2_640 = imageX + 0.5f * bboxW;
+        float32_t boxY2_640 = imageY + 0.5f * bboxH;
 
+        // Transform to original image coordinates (for display/IPC)
         float32_t boxX1, boxY1, boxX2, boxY2;
-        dwDataConditioner_outputPositionToInput(&boxX1, &boxY1, boxX1Tmp, boxY1Tmp, 
+        dwDataConditioner_outputPositionToInput(&boxX1, &boxY1, boxX1_640, boxY1_640, 
                                                 &m_roi[i], c.detConditioner);
-        dwDataConditioner_outputPositionToInput(&boxX2, &boxY2, boxX2Tmp, boxY2Tmp, 
+        dwDataConditioner_outputPositionToInput(&boxX2, &boxY2, boxX2_640, boxY2_640, 
                                                 &m_roi[i], c.detConditioner);
         
         dwRectf bboxFloat{boxX1, boxY1, boxX2 - boxX1, boxY2 - boxY1};
-        tmpRes.push_back({bboxFloat, maxScore, maxClass});
+        dwRectf bboxFloat640{boxX1_640, boxY1_640, boxX2_640 - boxX1_640, boxY2_640 - boxY1_640};
+        
+        tmpRes.push_back({bboxFloat, bboxFloat640, maxScore, maxClass});
     }
 
     CHECK_DW_ERROR(dwDNNTensor_unlock(c.detOutTensorHost));
@@ -1342,7 +1722,8 @@ void DriveSeg4CamServer::collectDetectionResults(uint32_t i)
         YoloScoreRect box = tmpResAfterNMS[j];
         const std::string& className = YOLO_CLASS_NAMES[box.classIndex];
         if (m_automotiveClasses.find(className) != m_automotiveClasses.end()) {
-            c.detBoxes.push_back(box.rectf);
+            c.detBoxes.push_back(box.rectf);        // Original coords (for display)
+            c.detBoxes640.push_back(box.rectf640);  // 640×640 coords (for Stage2)
             c.detLabels.push_back(className);
         }
     }
@@ -1352,36 +1733,20 @@ void DriveSeg4CamServer::collectDetectionResults(uint32_t i)
 }
 
 
-
-
 void DriveSeg4CamServer::collectStage2Results(uint32_t i)
 {
     auto &c = m_dnnCtx[i];
     
-    // Receive all outputs
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensorStreamer_consumerReceive(
-            &c.stage2OutTensorsHost[j], 1000, c.stage2OutStreamers[j]));
+    // Data already on host from runStage2Inference
+    float* depthData = c.stage2HostDepth;
+    float* dimsData = c.stage2HostDims;
+    float* rotBinsData = c.stage2HostRotBins;
+    float* rotResData = c.stage2HostRotRes;
+    
+    if (!depthData || !dimsData || !rotBinsData || !rotResData) {
+        std::cout << "[Stage2] ERROR: Host pointers not set for cam " << i << "\n";
+        return;
     }
-    
-    // Lock output tensors
-    void* depthPtr = nullptr;
-    void* dimsPtr = nullptr;
-    void* rotBinsPtr = nullptr;
-    void* rotResPtr = nullptr;
-    void* iouPtr = nullptr;
-    
-    CHECK_DW_ERROR(dwDNNTensor_lock(&depthPtr, c.stage2OutTensorsHost[0]));      // depth
-    CHECK_DW_ERROR(dwDNNTensor_lock(&dimsPtr, c.stage2OutTensorsHost[1]));       // dimensions
-    CHECK_DW_ERROR(dwDNNTensor_lock(&rotBinsPtr, c.stage2OutTensorsHost[3]));    // rotation_bins
-    CHECK_DW_ERROR(dwDNNTensor_lock(&rotResPtr, c.stage2OutTensorsHost[4]));     // rotation_res
-    CHECK_DW_ERROR(dwDNNTensor_lock(&iouPtr, c.stage2OutTensorsHost[5]));        // iou [100, 1] ← NOW 2D!
-    
-    float* depthData = reinterpret_cast<float*>(depthPtr);
-    float* dimsData = reinterpret_cast<float*>(dimsPtr);
-    float* rotBinsData = reinterpret_cast<float*>(rotBinsPtr);
-    float* rotResData = reinterpret_cast<float*>(rotResPtr);
-    float* iouData = reinterpret_cast<float*>(iouPtr);
     
     std::lock_guard<std::mutex> lock(c.stage2Mutex);
     c.depths.clear();
@@ -1389,15 +1754,16 @@ void DriveSeg4CamServer::collectStage2Results(uint32_t i)
     c.rotations.clear();
     c.iouScores.clear();
     
-    // Process only actual detections (not padded zeros)
     size_t numActualBoxes = std::min<size_t>(c.detBoxes.size(), STAGE2_MAX_BOXES);
     
+    const float PI = 3.14159265358979f;
+    const float binSize = 2.0f * PI / 12.0f;
+    
     for (size_t n = 0; n < numActualBoxes; ++n) {
-        // Extract depth (first value of [depth, log_var, offset])
-        float depth = depthData[n * 3];
+        // DEPTH: depth + offset
+        float depth = depthData[n * 3 + 0] + depthData[n * 3 + 2];
         
-        // Skip if invalid (all zeros or negative)
-        if (depth <= 0.01f) {
+        if (depth <= 0.1f || depth > 200.0f) {
             c.depths.push_back(0.0f);
             c.dimensions.push_back(0.0f);
             c.dimensions.push_back(0.0f);
@@ -1409,12 +1775,12 @@ void DriveSeg4CamServer::collectStage2Results(uint32_t i)
         
         c.depths.push_back(depth);
         
-        // Extract dimensions [h, w, l]
-        c.dimensions.push_back(dimsData[n * 3 + 0]);  // height
-        c.dimensions.push_back(dimsData[n * 3 + 1]);  // width
-        c.dimensions.push_back(dimsData[n * 3 + 2]);  // length
+        // DIMENSIONS
+        c.dimensions.push_back(dimsData[n * 3 + 0]);  // h
+        c.dimensions.push_back(dimsData[n * 3 + 1]);  // w
+        c.dimensions.push_back(dimsData[n * 3 + 2]);  // l
         
-        // Decode rotation from bins + residuals
+        // ROTATION
         float maxVal = rotBinsData[n * 12];
         int maxBin = 0;
         for (int b = 1; b < 12; ++b) {
@@ -1424,31 +1790,21 @@ void DriveSeg4CamServer::collectStage2Results(uint32_t i)
             }
         }
         
-        const float binSize = 2.0f * M_PI / 12.0f;
-        float binCenter = (maxBin + 0.5f) * binSize - M_PI;
+        float binCenter = (maxBin + 0.5f) * binSize;
         float residual = rotResData[n * 12 + maxBin];
         float rotation = binCenter + residual;
-        c.rotations.push_back(rotation);
         
-        // iouData is now laid out as [iou0, iou1, iou2, ...] with stride 1
-        c.iouScores.push_back(iouData[n * 1 + 0]);  // or simply: iouData[n]
+        // Normalize to [-π, π]
+        rotation = fmodf(rotation + PI, 2.0f * PI);
+        if (rotation < 0) rotation += 2.0f * PI;
+        rotation -= PI;
+        
+        c.rotations.push_back(rotation);
+        c.iouScores.push_back(1.0f);
     }
     
-    // Unlock tensors
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[0]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[1]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[3]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[4]));
-    CHECK_DW_ERROR(dwDNNTensor_unlock(c.stage2OutTensorsHost[5]));
-    
-    // Return tensors
-    for (uint32_t j = 0; j < 7; ++j) {
-        CHECK_DW_ERROR(dwDNNTensorStreamer_consumerReturn(
-            &c.stage2OutTensorsHost[j], c.stage2OutStreamers[j]));
-        CHECK_DW_ERROR(dwDNNTensorStreamer_producerReturn(nullptr, 1000, c.stage2OutStreamers[j]));
-    }
+    std::cout << "[Stage2] Cam " << i << " decoded " << c.depths.size() << " 3D boxes\n";
 }
-
 
 // ===============================================================
 // FRAME EXTRACTION & IPC TRANSMISSION
