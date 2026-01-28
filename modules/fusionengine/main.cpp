@@ -70,8 +70,8 @@ public:
     void onRender() override;
     void onKeyDown(int key, int scancode, int mods) override;
     void onMouseMove(float x, float y) override;
-    void onMouseDown(int button, float x, float y) override;
-    void onMouseUp(int button, float x, float y) override;
+    void onMouseDown(int button, float x, float y, int mods) override;
+    void onMouseUp(int button, float x, float y, int mods) override;
     void onMouseWheel(float x, float y) override;
 
 private:
@@ -151,14 +151,35 @@ FusionEngineApp::FusionEngineApp(const ProgramArguments& args)
 //------------------------------------------------------------------------------
 void FusionEngineApp::parseArguments()
 {
+    // Access full ProgramArguments to distinguish defaults vs. user-specified values
+    ProgramArguments& args = getArgs();
+
     // LiDAR settings
-    m_lidarIP = getArgument("lidar-ip");
+    // Support both "lidar-ip" and legacy "ip" from lidar visualization sample.
+    // If user explicitly passed --ip, that should override the default lidar-ip.
+    if (args.wasSpecified("ip"))
+    {
+        m_lidarIP = args.get("ip");
+    }
+    else
+    {
+        m_lidarIP = args.get("lidar-ip");
+    }
     if (m_lidarIP.empty())
     {
         m_lidarIP = "127.0.0.1";
     }
 
-    std::string lidarPortStr = getArgument("lidar-port");
+    // Support both "lidar-port" and legacy "port" from lidar visualization sample
+    std::string lidarPortStr;
+    if (args.wasSpecified("port"))
+    {
+        lidarPortStr = args.get("port");
+    }
+    else
+    {
+        lidarPortStr = args.get("lidar-port");
+    }
     if (!lidarPortStr.empty())
     {
         m_lidarPort = static_cast<uint16_t>(std::stoul(lidarPortStr));
@@ -184,13 +205,23 @@ void FusionEngineApp::parseArguments()
     }
 
     // Enable/disable sensors
-    std::string enableLidarStr = getArgument("enable-lidar");
+    std::string enableLidarStr = args.get("enable-lidar");
     if (!enableLidarStr.empty())
     {
         m_enableLidar = (enableLidarStr == "1" || enableLidarStr == "true");
     }
 
-    std::string enableCamerasStr = getArgument("enable-cameras");
+    // Support both "enable-cameras" and legacy "enable-camera".
+    // If user explicitly passed --enable-camera, that should override the default.
+    std::string enableCamerasStr;
+    if (args.wasSpecified("enable-camera"))
+    {
+        enableCamerasStr = args.get("enable-camera");
+    }
+    else
+    {
+        enableCamerasStr = args.get("enable-cameras");
+    }
     if (!enableCamerasStr.empty())
     {
         m_enableCameras = (enableCamerasStr == "1" || enableCamerasStr == "true");
@@ -264,10 +295,10 @@ bool FusionEngineApp::initDriveWorks()
     std::cout << "Initializing DriveWorks..." << std::endl;
 
     // Print SDK version
-    int32_t major, minor, patch;
-    dwGetVersionNumbers(&major, &minor, &patch);
-    std::cout << "  DriveWorks SDK version: " << major << "." << minor << "."
-              << patch << std::endl;
+    dwVersion version{};
+    CHECK_DW_ERROR(dwGetVersion(&version));
+    std::cout << "  DriveWorks SDK version: " << version.major << "."
+              << version.minor << "." << version.patch << std::endl;
 
     // Create context
     dwContextParameters contextParams{};
@@ -288,30 +319,19 @@ bool FusionEngineApp::initVisualization()
 
     // Create render engine
     dwRenderEngineParams renderParams{};
-    renderParams.defaultTile.lineWidth = 2.0f;
-    renderParams.defaultTile.font = DW_RENDER_ENGINE_FONT_VERDANA_16;
-    renderParams.bounds.x = 0;
-    renderParams.bounds.y = 0;
-    renderParams.bounds.width = m_windowWidth;
-    renderParams.bounds.height = m_windowHeight;
-
     CHECK_DW_ERROR(
         dwRenderEngine_initDefaultParams(&renderParams, m_windowWidth, m_windowHeight));
+    renderParams.defaultTile.lineWidth = 2.0f;
+    renderParams.defaultTile.font = DW_RENDER_ENGINE_FONT_VERDANA_16;
+    renderParams.bounds.x = 0.0f;
+    renderParams.bounds.y = 0.0f;
+    renderParams.bounds.width = static_cast<float32_t>(m_windowWidth);
+    renderParams.bounds.height = static_cast<float32_t>(m_windowHeight);
+
     CHECK_DW_ERROR(dwRenderEngine_initialize(&m_renderEngine, &renderParams, m_viz));
 
-    // Add main tile for 3D view
-    dwRenderEngineTileState tileState{};
-    dwRenderEngine_initTileState(&tileState);
-    tileState.projectionType = DW_RENDER_ENGINE_TILE_PROJECTION_TYPE_3D;
-
-    dwRenderEngineTileLayout tileLayout{};
-    tileLayout.positionLayout = DW_RENDER_ENGINE_TILE_LAYOUT_TYPE_ABSOLUTE;
-    tileLayout.sizeLayout = DW_RENDER_ENGINE_TILE_LAYOUT_TYPE_ABSOLUTE;
-    tileLayout.positionType.absolutePosition = {0, 0};
-    tileLayout.sizeType.absoluteSize = {m_windowWidth, m_windowHeight};
-
-    CHECK_DW_ERROR(dwRenderEngine_addTile(&m_mainTile, &tileState, &tileLayout,
-                                          m_renderEngine));
+    // Use default tile (ID 0) for 3D view
+    m_mainTile = 0;
 
     // Initialize mouse view for camera control
     m_mouseView = std::make_unique<MouseView3D>();
@@ -320,7 +340,10 @@ bool FusionEngineApp::initVisualization()
 
     // Set initial camera position (bird's eye view)
     m_mouseView->setCenter(0.0f, 0.0f, 0.0f);
-    m_mouseView->setAngleAndRadius(0.0f, -60.0f, 50.0f);
+    // Approximate original view: yaw = 0 deg, pitch = -60 deg, radius = 50 m
+    constexpr float DEG2RAD = 3.14159265f / 180.0f;
+    m_mouseView->setRadiusFromCenter(50.0f);
+    m_mouseView->setAngleFromCenter(0.0f, -60.0f * DEG2RAD);
 
     return true;
 }
@@ -333,24 +356,23 @@ bool FusionEngineApp::initRenderBuffers()
     std::cout << "Initializing render buffers..." << std::endl;
 
     // Point cloud buffer (for LiDAR points)
-    dwRenderEngineParams params{};
-    dwRenderEngine_initDefaultParams(&params, m_windowWidth, m_windowHeight);
-
+    // Each point rendered as 3D vertex (x, y, z)
     CHECK_DW_ERROR(dwRenderEngine_createBuffer(
         &m_pointCloudBufferId,
         DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-        MAX_LIDAR_POINTS,
-        m_mainTile,
+        sizeof(float) * 3,  // vertex stride
+        0,                  // offset
+        MAX_LIDAR_POINTS,   // max primitives
         m_renderEngine));
 
     // Detection bounding box lines buffer
-    // Each 3D box = 12 edges, each edge = 2 vertices
-    // Max detections * 12 edges * 2 = max lines
+    // Each 3D box = 12 edges (line primitives)
     CHECK_DW_ERROR(dwRenderEngine_createBuffer(
         &m_detectionLineBufferId,
         DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-        MAX_FUSED_DETECTIONS * 24,
-        m_mainTile,
+        sizeof(float) * 3,                // vertex stride
+        0,                                // offset
+        MAX_FUSED_DETECTIONS * 12,        // max line primitives
         m_renderEngine));
 
     return true;
@@ -411,6 +433,16 @@ bool FusionEngineApp::initFusionEngine()
 
     // Set fusion callback
     m_fusionEngine->setFusionCallback([this](const FusedPacket& packet) {
+        static std::atomic<uint64_t> cbCount{0};
+        uint64_t n = ++cbCount;
+        if (n <= 5)
+        {
+            std::cout << "[FusionEngineApp] Fusion callback #" << n
+                      << " frame=" << packet.lidarFrameNumber
+                      << " points=" << packet.lidarData.numPoints
+                      << " detections=" << packet.lidarData.detections.size()
+                      << std::endl;
+        }
         std::lock_guard<std::mutex> lock(m_packetMutex);
         m_currentPacket = packet;
         m_hasPacket = true;
@@ -509,12 +541,12 @@ void FusionEngineApp::onRender()
     CHECK_DW_ERROR(dwRenderEngine_setTile(m_mainTile, m_renderEngine));
 
     // Set camera transformation from mouse view
-    dwMatrix4f modelView = m_mouseView->getModelView();
-    dwMatrix4f projection = m_mouseView->getProjection();
+    const dwMatrix4f* modelView = m_mouseView->getModelView();
+    const dwMatrix4f* projection = m_mouseView->getProjection();
     CHECK_DW_ERROR(
-        dwRenderEngine_setModelView(&modelView, m_renderEngine));
+        dwRenderEngine_setModelView(modelView, m_renderEngine));
     CHECK_DW_ERROR(
-        dwRenderEngine_setProjection(&projection, m_renderEngine));
+        dwRenderEngine_setProjection(projection, m_renderEngine));
 
     // Clear background
     CHECK_DW_ERROR(dwRenderEngine_setBackgroundColor(
@@ -564,19 +596,18 @@ void FusionEngineApp::renderLidarPointCloud()
 
     // Map point cloud buffer
     float* pointBuffer = nullptr;
-    uint32_t maxPoints = 0;
-    uint32_t stride = 0;
+    uint32_t numPoints = std::min(packet.lidarData.numPoints, MAX_LIDAR_POINTS);
+    uint32_t sizeBytes = numPoints * 3U * sizeof(float);
 
     CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
         m_pointCloudBufferId,
         reinterpret_cast<void**>(&pointBuffer),
         0,
-        &maxPoints,
-        &stride,
+        sizeBytes,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
         m_renderEngine));
 
     // Copy points (x, y, z only - skip intensity)
-    uint32_t numPoints = std::min(packet.lidarData.numPoints, maxPoints);
     for (uint32_t i = 0; i < numPoints; ++i)
     {
         pointBuffer[i * 3 + 0] = packet.lidarData.points[i * 4 + 0];  // x
@@ -585,7 +616,9 @@ void FusionEngineApp::renderLidarPointCloud()
     }
 
     CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
-        m_pointCloudBufferId, numPoints, m_renderEngine));
+        m_pointCloudBufferId,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
+        m_renderEngine));
 
     // Render points in green
     CHECK_DW_ERROR(dwRenderEngine_setColor({0.0f, 1.0f, 0.0f, 0.8f},
@@ -699,21 +732,23 @@ void FusionEngineApp::render3DBox(const FusedDetection& det, const float* color)
 
     // Map buffer and copy
     float* buffer = nullptr;
-    uint32_t maxVerts = 0;
-    uint32_t stride = 0;
+    uint32_t sizeBytes = sizeof(lineVerts);
 
     CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
         m_detectionLineBufferId,
         reinterpret_cast<void**>(&buffer),
         0,
-        &maxVerts,
-        &stride,
+        sizeBytes,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
         m_renderEngine));
 
-    std::memcpy(buffer, lineVerts, sizeof(lineVerts));
+    std::memcpy(buffer, lineVerts, sizeBytes);
 
     CHECK_DW_ERROR(
-        dwRenderEngine_unmapBuffer(m_detectionLineBufferId, 24, m_renderEngine));
+        dwRenderEngine_unmapBuffer(
+            m_detectionLineBufferId,
+            DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
+            m_renderEngine));
 
     // Render
     CHECK_DW_ERROR(dwRenderEngine_setColor(
@@ -852,7 +887,9 @@ void FusionEngineApp::onKeyDown(int key, int /*scancode*/, int /*mods*/)
     {
         // Reset camera view
         m_mouseView->setCenter(0.0f, 0.0f, 0.0f);
-        m_mouseView->setAngleAndRadius(0.0f, -60.0f, 50.0f);
+        constexpr float DEG2RAD = 3.14159265f / 180.0f;
+        m_mouseView->setRadiusFromCenter(50.0f);
+        m_mouseView->setAngleFromCenter(0.0f, -60.0f * DEG2RAD);
     }
     else if (key == GLFW_KEY_EQUAL || key == GLFW_KEY_KP_ADD)
     {
@@ -866,22 +903,22 @@ void FusionEngineApp::onKeyDown(int key, int /*scancode*/, int /*mods*/)
 
 void FusionEngineApp::onMouseMove(float x, float y)
 {
-    m_mouseView->mouseMove(static_cast<int>(x), static_cast<int>(y));
+    m_mouseView->mouseMove(x, y);
 }
 
-void FusionEngineApp::onMouseDown(int button, float x, float y)
+void FusionEngineApp::onMouseDown(int button, float x, float y, int /*mods*/)
 {
-    m_mouseView->mouseDown(button, static_cast<int>(x), static_cast<int>(y));
+    m_mouseView->mouseDown(button, x, y);
 }
 
-void FusionEngineApp::onMouseUp(int button, float x, float y)
+void FusionEngineApp::onMouseUp(int button, float x, float y, int /*mods*/)
 {
-    m_mouseView->mouseUp(button, static_cast<int>(x), static_cast<int>(y));
+    m_mouseView->mouseUp(button, x, y);
 }
 
 void FusionEngineApp::onMouseWheel(float /*x*/, float y)
 {
-    m_mouseView->mouseWheel(static_cast<int>(y * 10.0f));
+    m_mouseView->mouseWheel(0.0f, y * 10.0f);
 }
 
 //------------------------------------------------------------------------------
@@ -893,10 +930,16 @@ int main(int argc, const char** argv)
     ProgramArguments args(argc, argv,
     {
         // LiDAR settings
+        // Note: also accept "ip" and "port" as aliases to match the
+        // lidar_object_detection_ipc_visualization sample CLI.
         ProgramArguments::Option_t{"lidar-ip", "127.0.0.1",
             "LiDAR server IP address"},
         ProgramArguments::Option_t{"lidar-port", "40002",
             "LiDAR server port"},
+        ProgramArguments::Option_t{"ip", "127.0.0.1",
+            "Alias for lidar-ip (LiDAR server IP address)"},
+        ProgramArguments::Option_t{"port", "40002",
+            "Alias for lidar-port (LiDAR server port)"},
         ProgramArguments::Option_t{"enable-lidar", "1",
             "Enable LiDAR input (0/1)"},
 
@@ -909,6 +952,8 @@ int main(int argc, const char** argv)
             "Number of cameras (1-4)"},
         ProgramArguments::Option_t{"enable-cameras", "1",
             "Enable camera input (0/1)"},
+        ProgramArguments::Option_t{"enable-camera", "1",
+            "Alias for enable-cameras (Enable camera input (0/1))"},
 
         // Processing settings
         ProgramArguments::Option_t{"async", "1",
@@ -918,9 +963,7 @@ int main(int argc, const char** argv)
         ProgramArguments::Option_t{"width", "1920",
             "Window width"},
         ProgramArguments::Option_t{"height", "1080",
-            "Window height"},
-        ProgramArguments::Option_t{"offscreen", "0",
-            "Offscreen rendering (0/1)"}
+            "Window height"}
     });
 
     // Create and run application
