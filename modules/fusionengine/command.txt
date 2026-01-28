@@ -1,0 +1,47 @@
+# FusionEngine Example Commands
+# Multi-sensor fusion consumer for LiDAR and Camera DNN data
+
+# Default: Connect to all servers on localhost
+./fusionengine
+
+# Connect to specific LiDAR server
+./fusionengine --lidar-ip=192.168.1.100 --lidar-port=40002
+
+# Connect to specific camera servers
+./fusionengine --camera-ip=192.168.1.100 --camera-port=49252 --num-cameras=4
+
+# LiDAR only mode (disable cameras)
+./fusionengine --enable-cameras=0
+
+# Camera only mode (disable LiDAR)
+./fusionengine --enable-lidar=0
+
+# Single camera mode
+./fusionengine --num-cameras=1
+
+# Synchronous processing mode (for debugging)
+./fusionengine --async=0
+
+# Custom window size
+./fusionengine --width=1280 --height=720
+
+# Offscreen mode (headless)
+./fusionengine --offscreen=1
+
+# Full configuration example
+./fusionengine \
+    --lidar-ip=127.0.0.1 \
+    --lidar-port=40002 \
+    --camera-ip=127.0.0.1 \
+    --camera-port=49252 \
+    --num-cameras=4 \
+    --enable-lidar=1 \
+    --enable-cameras=1 \
+    --async=1 \
+    --width=1920 \
+    --height=1080
+
+# Run with servers:
+# Terminal 1: ./lidardetseg_server --rigFile=... --port=40002
+# Terminal 2: ./driveseg_object --rig=... --port=49252
+# Terminal 3: ./fusionengine
