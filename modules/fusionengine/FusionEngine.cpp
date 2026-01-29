@@ -165,7 +165,7 @@ void FusionEngine::start()
                 &FusionEngine::lidarReceiveThread, this);
         }
 
-        // Launch camera receive threads
+        // Launch camera receive threads (only if cameras are enabled)
         if (m_config.enableCameras)
         {
             for (uint32_t i = 0; i < m_config.numCameras; ++i)
@@ -173,11 +173,11 @@ void FusionEngine::start()
                 m_cameraThreads[i] = std::make_unique<std::thread>(
                     &FusionEngine::cameraReceiveThread, this, i);
             }
-        }
 
-        // Launch fusion thread
-        m_fusionThread = std::make_unique<std::thread>(
-            &FusionEngine::fusionThread, this);
+            // Launch fusion thread only when camera data is part of fusion
+            m_fusionThread = std::make_unique<std::thread>(
+                &FusionEngine::fusionThread, this);
+        }
     }
 
     std::cout << "[FusionEngine] Started" << std::endl;
@@ -377,6 +377,8 @@ void FusionEngine::lidarReceiveThread()
 {
     std::cout << "[FusionEngine] LiDAR receive thread started" << std::endl;
 
+    uint64_t localFrameCount = 0;
+
     while (m_running)
     {
         if (!m_lidarClient->isConnected())
@@ -388,7 +390,71 @@ void FusionEngine::lidarReceiveThread()
         LidarFrameData lidarData;
         if (m_lidarClient->receive(lidarData))
         {
-            m_synchronizer.pushLidarData(lidarData);
+            ++localFrameCount;
+            if (localFrameCount <= 5)
+            {
+                std::cout << "[FusionEngine] Received LiDAR frame "
+                          << localFrameCount
+                          << " ts=" << lidarData.timestamp
+                          << " numPoints=" << lidarData.numPoints
+                          << " numDetections=" << lidarData.detections.size()
+                          << std::endl;
+            }
+
+            // If cameras are enabled, go through the normal synchronizer + fusion path.
+            // If cameras are disabled, produce a simple LiDAR-only fused packet here.
+            if (m_config.enableCameras)
+            {
+                m_synchronizer.pushLidarData(lidarData);
+            }
+            else
+            {
+                FusedPacket fused{};
+
+                fused.lidarData       = lidarData;
+                fused.lidarTimestamp  = lidarData.timestamp;
+                fused.lidarFrameNumber = lidarData.frameNumber;
+
+                // No cameras, so leave camera-related fields at defaults.
+                fused.numLidarOnlyDetections   = static_cast<uint32_t>(lidarData.detections.size());
+                fused.numCameraOnlyDetections  = 0;
+                fused.numFusedDetections       = 0;
+
+                // Basic timing metadata
+                auto now = std::chrono::high_resolution_clock::now();
+                auto us  = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                fused.fusionTimestamp = static_cast<dwTime_t>(us);
+                fused.fusionProcessingMs = 0.0f;
+                fused.totalProcessingMs = 0.0f;
+                fused.temporalAlignmentError = 0.0f;
+                fused.valid = true;
+
+                // Update statistics counter and assign a fusion frame number
+                m_fusedPacketsProduced++;
+                fused.fusionFrameNumber =
+                    static_cast<uint32_t>(m_fusedPacketsProduced.load());
+
+                // Store latest packet
+                {
+                    std::lock_guard<std::mutex> lock(m_outputMutex);
+                    m_latestFusedPacket = fused;
+                    m_hasFusedPacket    = true;
+                }
+
+                // Invoke callback for visualization
+                if (m_fusionCallback)
+                {
+                    if (localFrameCount <= 5)
+                    {
+                        std::cout << "[FusionEngine] Invoking fusion callback for frame "
+                                  << fused.lidarFrameNumber
+                                  << " (points=" << fused.lidarData.numPoints
+                                  << ", detections=" << fused.lidarData.detections.size()
+                                  << ")" << std::endl;
+                    }
+                    m_fusionCallback(fused);
+                }
+            }
         }
         else
         {

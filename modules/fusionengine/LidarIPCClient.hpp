@@ -34,9 +34,11 @@
 namespace fusionengine {
 
 //------------------------------------------------------------------------------
-// LiDAR Detection Packet (must match lidardetseg_server/DetectionPacket.hpp)
+// LiDAR Detection Packet
+// NOTE: This layout must match the binary packet sent by the lidar producer
+// (same as DetectionPacket in the lidar visualization sample), but we keep
+// it self-contained here instead of including that header.
 //------------------------------------------------------------------------------
-#pragma pack(push, 1)
 struct LidarDetectionPacket
 {
     dwTime_t timestamp;
@@ -76,7 +78,6 @@ struct LidarDetectionPacket
     uint32_t frameNumber;
     bool icpAligned;
 };
-#pragma pack(pop)
 
 //------------------------------------------------------------------------------
 // LiDAR IPC Client Class
