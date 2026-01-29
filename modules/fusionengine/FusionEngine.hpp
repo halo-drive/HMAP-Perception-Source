@@ -9,214 +9,345 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-#ifndef FUSIONENGINE_FUSIONENGINE_HPP
-#define FUSIONENGINE_FUSIONENGINE_HPP
+#ifndef FUSIONENGINE_LIDARIPCCLIENT_HPP
+#define FUSIONENGINE_LIDARIPCCLIENT_HPP
 
-#include <array>
 #include <atomic>
-#include <functional>
-#include <memory>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
 // DriveWorks headers
 #include <dw/core/base/Types.h>
 #include <dw/core/base/Version.h>
 #include <dw/core/context/Context.h>
 #include <dw/core/logger/Logger.h>
+#include <dw/comms/socketipc/SocketClientServer.h>
 
-// Local headers
+#include <framework/Checks.hpp>
+
 #include "FusedPacket.hpp"
-#include "LidarIPCClient.hpp"
-#include "CameraIPCClient.hpp"
-#include "SensorSynchronizer.hpp"
 
 namespace fusionengine {
 
 //------------------------------------------------------------------------------
-// Fusion Engine Configuration
+// LiDAR Detection Packet
+// Layout must match DetectionPacket in
+// lidar_object_detection_interprocess_communiation/DetectionPacket.hpp exactly
+// (same sizes and field order) so that sizeof(LidarDetectionPacket) equals
+// the producer's packet size and the stream stays in sync.
 //------------------------------------------------------------------------------
-struct FusionEngineConfig
+struct LidarDetectionPacket
 {
-    // LiDAR IPC settings
-    bool enableLidar{true};
-    std::string lidarServerIP{"127.0.0.1"};
-    uint16_t lidarServerPort{40002};
+    dwTime_t timestamp;
 
-    // Camera IPC settings
-    bool enableCameras{true};
-    uint32_t numCameras{4};
-    std::string cameraServerIP{"127.0.0.1"};
-    uint16_t cameraServerBasePort{49252};
+    static constexpr uint32_t MAX_POINTS = 100000;
+    uint32_t numPoints;
+    float points[MAX_POINTS * 4];  // x, y, z, intensity
 
-    // Connection settings
-    uint32_t connectionRetries{30};
-    uint32_t connectionTimeoutUs{1000000};
+    static constexpr uint32_t MAX_DETECTIONS = 100;
+    uint32_t numDetections;
 
-    // Synchronization settings
-    SynchronizerConfig syncConfig;
+    struct DetectionBoundingBox
+    {
+        float x, y, z;
+        float width, length, height;
+        float rotation;
+        float confidence;
+        int32_t classId;
+    };
+    DetectionBoundingBox boxes[MAX_DETECTIONS];
 
-    // Fusion settings
-    float iouThreshold{0.3f};           // IoU threshold for detection matching
-    float confidenceThreshold{0.5f};    // Minimum confidence for fusion
-    bool projectCameraToLidar{true};    // Project camera 3D boxes to LiDAR frame
+    struct GroundPlane
+    {
+        float normalX, normalY, normalZ;
+        float offset;
+        bool valid;
+    };
+    GroundPlane groundPlane;
 
-    // Threading
-    bool asyncReceive{true};            // Use separate threads for receiving
+    // Must match producer: FreeSpaceData has MAX_FREE_SPACE_POINTS = 50000
+    static constexpr uint32_t MAX_FREE_SPACE_POINTS = 50000;
+    struct FreeSpace
+    {
+        uint32_t numPoints;
+        float points[MAX_FREE_SPACE_POINTS * 3];
+    };
+    FreeSpace freeSpace;
+
+    uint32_t frameNumber;
+    bool icpAligned;
 };
 
 //------------------------------------------------------------------------------
-// Fusion callback type
+// LiDAR IPC Client Class
 //------------------------------------------------------------------------------
-using FusionCallback = std::function<void(const FusedPacket&)>;
-
-//------------------------------------------------------------------------------
-// Fusion Engine Class
-//------------------------------------------------------------------------------
-class FusionEngine
+class LidarIPCClient
 {
 public:
-    FusionEngine();
-    ~FusionEngine();
+    LidarIPCClient() = default;
+    ~LidarIPCClient()
+    {
+        release();
+    }
 
     // Non-copyable
-    FusionEngine(const FusionEngine&) = delete;
-    FusionEngine& operator=(const FusionEngine&) = delete;
+    LidarIPCClient(const LidarIPCClient&) = delete;
+    LidarIPCClient& operator=(const LidarIPCClient&) = delete;
 
     //--------------------------------------------------------------------------
-    // Lifecycle
+    // Initialize the LiDAR IPC client
     //--------------------------------------------------------------------------
+    bool initialize(dwContextHandle_t context,
+                    const std::string& serverIP = "127.0.0.1",
+                    uint16_t port = 40002)
+    {
+        if (m_socketClient != DW_NULL_HANDLE)
+        {
+            std::cerr << "[LidarIPCClient] Already initialized" << std::endl;
+            return true;
+        }
 
-    /**
-     * Initialize the fusion engine with given configuration
-     * @param context DriveWorks context handle
-     * @param config Configuration parameters
-     * @return true if successful
-     */
-    bool initialize(dwContextHandle_t context, const FusionEngineConfig& config);
+        m_context = context;
+        m_serverIP = serverIP;
+        m_port = port;
 
-    /**
-     * Connect to all configured sensor servers
-     * @return true if all connections successful
-     */
-    bool connect();
+        std::cout << "[LidarIPCClient] Initializing..." << std::endl;
+        std::cout << "  Server: " << m_serverIP << ":" << m_port << std::endl;
 
-    /**
-     * Start processing (launches receive threads if async mode)
-     */
-    void start();
+        // Initialize socket client
+        dwStatus status = dwSocketClient_initialize(&m_socketClient, 1, m_context);
+        if (status != DW_SUCCESS)
+        {
+            std::cerr << "[LidarIPCClient] Failed to initialize socket client: "
+                      << dwGetStatusName(status) << std::endl;
+            return false;
+        }
 
-    /**
-     * Stop processing
-     */
-    void stop();
-
-    /**
-     * Release all resources
-     */
-    void release();
-
-    //--------------------------------------------------------------------------
-    // Processing
-    //--------------------------------------------------------------------------
-
-    /**
-     * Process one cycle (synchronous mode)
-     * Call this in your main loop if asyncReceive is false
-     */
-    void process();
-
-    /**
-     * Try to get a synchronized/fused packet
-     * @param fusedPacket Output fused packet
-     * @return true if a fused packet is available
-     */
-    bool tryGetFusedPacket(FusedPacket& fusedPacket);
-
-    /**
-     * Register callback for fused packets
-     * @param callback Function to call when fused data is available
-     */
-    void setFusionCallback(FusionCallback callback);
+        m_status = SensorStatus::CONNECTING;
+        return true;
+    }
 
     //--------------------------------------------------------------------------
-    // Status
+    // Connect to the LiDAR server
     //--------------------------------------------------------------------------
+    bool connect(uint32_t maxRetries = 30, uint32_t timeoutUs = 1000000)
+    {
+        if (m_socketClient == DW_NULL_HANDLE)
+        {
+            std::cerr << "[LidarIPCClient] Not initialized" << std::endl;
+            return false;
+        }
 
-    bool isInitialized() const { return m_initialized; }
-    bool isConnected() const;
-    bool isRunning() const { return m_running; }
+        std::cout << "[LidarIPCClient] Connecting to server..." << std::endl;
 
-    // Sensor status
-    SensorStatus getLidarStatus() const;
-    SensorStatus getCameraStatus(uint32_t cameraIndex) const;
+        dwStatus status = DW_TIME_OUT;
+        uint32_t retryCount = 0;
 
-    // Statistics
-    uint64_t getLidarPacketsReceived() const;
-    uint64_t getCameraFramesReceived(uint32_t cameraIndex) const;
-    uint64_t getFusedPacketsProduced() const { return m_fusedPacketsProduced; }
+        while (status == DW_TIME_OUT && retryCount < maxRetries)
+        {
+            status = dwSocketClient_connect(&m_socketConnection,
+                                            m_serverIP.c_str(),
+                                            m_port,
+                                            timeoutUs,
+                                            m_socketClient);
+            if (status == DW_TIME_OUT)
+            {
+                retryCount++;
+                std::cout << "[LidarIPCClient] Connection attempt "
+                          << retryCount << "/" << maxRetries << std::endl;
+            }
+        }
 
-    // Get configuration
-    const FusionEngineConfig& getConfig() const { return m_config; }
+        if (status == DW_SUCCESS)
+        {
+            m_connected = true;
+            m_status = SensorStatus::CONNECTED;
+            std::cout << "[LidarIPCClient] Connected!" << std::endl;
+            return true;
+        }
+
+        std::cerr << "[LidarIPCClient] Failed to connect: "
+                  << dwGetStatusName(status) << std::endl;
+        m_status = SensorStatus::ERROR;
+        return false;
+    }
+
+    //--------------------------------------------------------------------------
+    // Receive detection packet from LiDAR server
+    //--------------------------------------------------------------------------
+    bool receive(LidarFrameData& frameData)
+    {
+        if (!m_connected)
+        {
+            return false;
+        }
+
+        // Receive packet in chunks (TCP may fragment large packets)
+        const size_t totalSize = sizeof(LidarDetectionPacket);
+        size_t bytesReceived = 0;
+        uint8_t* buffer = reinterpret_cast<uint8_t*>(&m_receiveBuffer);
+
+        while (bytesReceived < totalSize)
+        {
+            size_t chunkSize = totalSize - bytesReceived;
+            dwStatus status = dwSocketConnection_read(
+                buffer + bytesReceived,
+                &chunkSize,
+                m_receiveTimeoutUs,
+                m_socketConnection);
+
+            if (status == DW_END_OF_STREAM)
+            {
+                std::cerr << "[LidarIPCClient] Server disconnected" << std::endl;
+                m_connected = false;
+                m_status = SensorStatus::DISCONNECTED;
+                return false;
+            }
+            else if (status == DW_TIME_OUT)
+            {
+                // Timeout is non-fatal, just no data available
+                return false;
+            }
+            else if (status != DW_SUCCESS)
+            {
+                m_receiveErrors++;
+                if (m_receiveErrors <= 5)
+                {
+                    std::cerr << "[LidarIPCClient] Receive error: "
+                              << dwGetStatusName(status) << std::endl;
+                }
+                return false;
+            }
+
+            bytesReceived += chunkSize;
+        }
+
+        // Successfully received full packet - convert to LidarFrameData
+        m_status = SensorStatus::RECEIVING;
+        convertToFrameData(m_receiveBuffer, frameData);
+        m_packetsReceived++;
+
+        return true;
+    }
+
+    //--------------------------------------------------------------------------
+    // Release resources
+    //--------------------------------------------------------------------------
+    void release()
+    {
+        if (m_socketConnection != DW_NULL_HANDLE)
+        {
+            dwSocketConnection_release(m_socketConnection);
+            m_socketConnection = DW_NULL_HANDLE;
+        }
+
+        if (m_socketClient != DW_NULL_HANDLE)
+        {
+            dwSocketClient_release(m_socketClient);
+            m_socketClient = DW_NULL_HANDLE;
+        }
+
+        m_connected = false;
+        m_status = SensorStatus::DISCONNECTED;
+    }
+
+    //--------------------------------------------------------------------------
+    // Status accessors
+    //--------------------------------------------------------------------------
+    bool isConnected() const { return m_connected; }
+    SensorStatus getStatus() const { return m_status; }
+    uint64_t getPacketsReceived() const { return m_packetsReceived; }
+    uint64_t getReceiveErrors() const { return m_receiveErrors; }
 
 private:
     //--------------------------------------------------------------------------
-    // Internal methods
+    // Convert raw packet to LidarFrameData structure
     //--------------------------------------------------------------------------
+    void convertToFrameData(const LidarDetectionPacket& packet,
+                            LidarFrameData& frameData)
+    {
+        frameData.timestamp = packet.timestamp;
+        frameData.frameNumber = packet.frameNumber;
+        frameData.icpAligned = packet.icpAligned;
 
-    // Receive thread functions
-    void lidarReceiveThread();
-    void cameraReceiveThread(uint32_t cameraIndex);
+        // Copy point cloud
+        frameData.numPoints = packet.numPoints;
+        frameData.points.resize(packet.numPoints * 4);
+        std::memcpy(frameData.points.data(),
+                    packet.points,
+                    packet.numPoints * 4 * sizeof(float));
 
-    // Fusion processing
-    void fusionThread();
-    void performFusion(FusedPacket& fusedPacket);
+        // Copy detections
+        frameData.detections.resize(packet.numDetections);
+        for (uint32_t i = 0; i < packet.numDetections; ++i)
+        {
+            const auto& src = packet.boxes[i];
+            auto& dst = frameData.detections[i];
 
-    // Detection fusion algorithms
-    void fuseDetections(FusedPacket& fusedPacket);
-    float computeIoU3D(const LidarBoundingBox& lidarBox,
-                       const Camera3DBox& cameraBox);
-    void projectCameraBoxToLidarFrame(const Camera3DBox& cameraBox,
-                                       uint32_t cameraIndex,
-                                       LidarBoundingBox& projectedBox);
+            dst.x = src.x;
+            dst.y = src.y;
+            dst.z = src.z;
+            dst.width = src.width;
+            dst.length = src.length;
+            dst.height = src.height;
+            dst.rotation = src.rotation;
+            dst.confidence = src.confidence;
+            dst.classId = src.classId;
+        }
+
+        // Copy ground plane
+        frameData.groundPlane.normalX = packet.groundPlane.normalX;
+        frameData.groundPlane.normalY = packet.groundPlane.normalY;
+        frameData.groundPlane.normalZ = packet.groundPlane.normalZ;
+        frameData.groundPlane.offset = packet.groundPlane.offset;
+        frameData.groundPlane.valid = packet.groundPlane.valid;
+
+        // Copy free space (FusedPacket uses MAX_FREE_SPACE_POINTS=360; truncate if needed)
+        const uint32_t maxFreeSpace = static_cast<uint32_t>(
+            sizeof(frameData.freeSpace.points) / (sizeof(float) * 3));
+        frameData.freeSpace.numPoints =
+            std::min(packet.freeSpace.numPoints, maxFreeSpace);
+        if (frameData.freeSpace.numPoints > 0)
+        {
+            std::memcpy(frameData.freeSpace.points,
+                        packet.freeSpace.points,
+                        frameData.freeSpace.numPoints * 3 * sizeof(float));
+        }
+
+        frameData.valid = true;
+    }
 
 private:
-    // Configuration
-    FusionEngineConfig m_config;
-
     // DriveWorks context
     dwContextHandle_t m_context{DW_NULL_HANDLE};
 
-    // IPC clients
-    std::unique_ptr<LidarIPCClient> m_lidarClient;
-    std::unique_ptr<MultiCameraIPCClient> m_cameraClient;
+    // Socket IPC handles
+    dwSocketClientHandle_t m_socketClient{DW_NULL_HANDLE};
+    dwSocketConnectionHandle_t m_socketConnection{DW_NULL_HANDLE};
 
-    // Sensor synchronizer
-    SensorSynchronizer m_synchronizer;
+    // Connection parameters
+    std::string m_serverIP{"127.0.0.1"};
+    uint16_t m_port{40002};
+
+    // Receive configuration
+    uint32_t m_receiveTimeoutUs{1000000};  // 1 second
 
     // State
-    std::atomic<bool> m_initialized{false};
-    std::atomic<bool> m_running{false};
-
-    // Threads
-    std::unique_ptr<std::thread> m_lidarThread;
-    std::array<std::unique_ptr<std::thread>, MAX_CAMERAS> m_cameraThreads;
-    std::unique_ptr<std::thread> m_fusionThread;
-
-    // Output
-    std::mutex m_outputMutex;
-    FusedPacket m_latestFusedPacket;
-    bool m_hasFusedPacket{false};
-
-    // Callback
-    FusionCallback m_fusionCallback;
+    std::atomic<bool> m_connected{false};
+    std::atomic<SensorStatus> m_status{SensorStatus::DISCONNECTED};
 
     // Statistics
-    std::atomic<uint64_t> m_fusedPacketsProduced{0};
+    std::atomic<uint64_t> m_packetsReceived{0};
+    std::atomic<uint64_t> m_receiveErrors{0};
+
+    // Receive buffer (large POD structure)
+    LidarDetectionPacket m_receiveBuffer{};
 };
 
 } // namespace fusionengine
 
-#endif // FUSIONENGINE_FUSIONENGINE_HPP
+#endif // FUSIONENGINE_LIDARIPCCLIENT_HPP
