@@ -1,4 +1,4 @@
-project(lidarseg_ipc_client)
+project(lidardet_ipc_client)
 
 #-------------------------------------------------------------------------------
 # Project files

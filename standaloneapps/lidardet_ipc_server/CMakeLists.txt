@@ -1,4 +1,4 @@
-project(lidarseg_ipc_server)
+project(lidardet_ipc_server)
 
 #-------------------------------------------------------------------------------
 # Detect architecture
