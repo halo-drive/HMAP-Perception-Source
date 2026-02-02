@@ -13,13 +13,13 @@ The implementation features a pure DriveWorks-native solution without external P
 
 ## Features
 
-- ✅ Real-time LiDAR-inertial odometry using Fast-LIO algorithm
-- ✅ Multi-sensor fusion (LiDAR, IMU, GPS/RTK)
-- ✅ Thread-safe data processing with mutex locks
-- ✅ DriveWorks-native visualization
-- ✅ Map building and saving capabilities
-- ✅ Localization mode (load pre-built maps)
-- ✅ Type conversion layer between Fast-LIO and DriveWorks datatypes
+-  Real-time LiDAR-inertial odometry using Fast-LIO algorithm
+-  Multi-sensor fusion (LiDAR, IMU, GPS/RTK)
+-  Thread-safe data processing with mutex locks
+-  DriveWorks-native visualization
+-  Map building and saving capabilities
+-  Localization mode (load pre-built maps)
+-  Type conversion layer between Fast-LIO and DriveWorks datatypes
 
 ## Dependencies
 
@@ -46,13 +46,7 @@ The build system automatically detects the architecture (x86_64 or aarch64) and 
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--lidar-protocol` | LiDAR sensor protocol (e.g., `lidar.virtual`) | `lidar.virtual` |
-| `--lidar-params` | LiDAR sensor parameters (e.g., `file=/path/to/lidar.bin`) | Required |
-| `--imu-protocol` | IMU sensor protocol (e.g., `imu.virtual`) | `imu.virtual` |
-| `--imu-params` | IMU sensor parameters (e.g., `file=/path/to/imu.bin`) | Required |
-| `--gps-protocol` | GPS/RTK sensor protocol | Optional |
-| `--gps-params` | GPS/RTK sensor parameters | Optional |
-| `--lidar-imu-extrinsics` | Extrinsic calibration between LiDAR and IMU | Optional |
+| `--rig` | LiDAR sensor protocol (e.g., `lidar.virtual`) | `lidar.virtual` |
 | `--voxel-size` | Voxel grid filter size for map downsampling | `0.5` |
 | `--map-file` | Path to pre-built map file for localization mode | Optional |
 | `--offscreen` | Enable offscreen rendering | Disabled |
@@ -62,10 +56,7 @@ The build system automatically detects the architecture (x86_64 or aarch64) and 
 ```bash
 # Mapping mode (build new map)
 ./sample_dw_fastlio_slam \
-    --lidar-protocol=lidar.virtual \
-    --lidar-params="file=/data/lidar.bin" \
-    --imu-protocol=imu.virtual \
-    --imu-params="file=/data/imu.bin" \
+    --rig=<path to rig.json> \
     --voxel-size=0.5
 
 # Localization mode (use existing map)
@@ -110,18 +101,17 @@ Proper sensor calibration is critical for accurate SLAM performance:
 - DriveWorks application compilation with Fast-LIO as dependency
 - Data type conversion layer between Fast-LIO library and DriveWorks datatypes
 - Mutex locks to prevent deadlocks and data overwriting
+- Run sensors using sensor manager and rig file 
 
 ### 🔄 In Progress
-- Identifying and fixing IMU/LiDAR data synchronization issues (sway correction)
-- CMake build system cleanup
-- Improving scan overlap for consecutive LiDAR frames
+- test on moving car
+- Solve dependencies for boost, pcl and g2o for orin. [ couldnt install then using sudo apt ]
+- Implement map saving and loading feature.
 
 ### ⚠️ Known Issues
-- **IMU/LiDAR Data Sway**: Consecutive scans don't overlap properly due to sensor data synchronization issues. This is actively being worked on.
 - **CPU-Only Processing**: Currently runs on CPU only. GPU acceleration is planned for future work.
 
 ## Future Work
-
 - **Localization Pipeline**: Build localization logic within  a saved map
 - **GPU Acceleration**: CUDA-accelerated point cloud processing and optimization
 - **Location-Based Map Management**: Automatic saving and loading of maps based on current GPS location

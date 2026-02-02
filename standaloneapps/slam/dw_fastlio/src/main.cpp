@@ -22,6 +22,8 @@
 #include <dw/sensors/lidar/Lidar.h>
 #include <dw/sensors/imu/IMU.h>
 #include <dw/sensors/gps/GPS.h>
+#include <dw/rig/Rig.h>
+#include <dw/sensors/sensormanager/SensorManager.h>
 
 // DriveWorks Visualization
 #include <dwvisualization/core/RenderEngine.h>
@@ -35,6 +37,7 @@
 #include <GLFW/glfw3.h>
 
 // Standard library
+#include <cmath>
 #include <ctime>
 #include <algorithm>
 
@@ -68,6 +71,10 @@ private:
     dwSensorHandle_t m_gpsSensor = DW_NULL_HANDLE;
     
     dwLidarProperties m_lidarProperties{};
+    
+    // Rig configuration
+    dwRigHandle_t m_rigConfig = DW_NULL_HANDLE;
+    dwSensorManagerHandle_t m_sensorManager = DW_NULL_HANDLE;
     
     // Visualization
     dwVisualizationContextHandle_t m_visualizationContext = DW_NULL_HANDLE;
@@ -127,6 +134,11 @@ public:
         setRenderRate(30);  // 30 FPS for rendering (smooth visualization)
         
         std::cout << "[DWFastLIO] System initialized successfully" << std::endl;
+        if (m_gpsSensor == DW_NULL_HANDLE) {
+            std::cout << "[DWFastLIO] GPS not available (no GPS in rig, or --gps-params/--gps-protocol not set); RTK will not be fed to Fast-LIO" << std::endl;
+        } else {
+            std::cout << "[DWFastLIO] GPS available; RTK will be fed to Fast-LIO when valid" << std::endl;
+        }
         std::cout << "[DWFastLIO] Mode: MAPPING" << std::endl;
         std::cout << "[DWFastLIO] Process rate: 6 FPS, Render rate: 30 FPS" << std::endl;
         std::cout << "[DWFastLIO] Press 'M' to toggle MAPPING/LOCALIZATION mode" << std::endl;
@@ -137,6 +149,140 @@ public:
     }
     
     bool initializeSensors() {
+        // Check if rig file is provided
+        std::string rigFile = getArgument("rig-file");
+        
+        if (!rigFile.empty()) {
+            // Initialize from rig file
+            return initializeSensorsFromRig(rigFile);
+        } else {
+            // Fall back to command-line parameters
+            return initializeSensorsFromParams();
+        }
+    }
+    
+    bool initializeSensorsFromRig(const std::string& rigFile) {
+        // Initialize rig configuration
+        dwStatus status = dwRig_initializeFromFile(&m_rigConfig, m_context, rigFile.c_str());
+        if (status != DW_SUCCESS) {
+            std::cerr << "[DWFastLIO] ERROR: Failed to load rig file: " << rigFile 
+                      << " - " << dwGetStatusName(status) << std::endl;
+            return false;
+        }
+        
+        std::cout << "[DWFastLIO] Loaded rig file: " << rigFile << std::endl;
+        
+        // Initialize sensor manager from rig
+        status = dwSensorManager_initializeFromRig(&m_sensorManager, m_rigConfig,
+                                                    DW_SENSORMANGER_MAX_NUM_SENSORS, m_sal);
+        if (status != DW_SUCCESS) {
+            std::cerr << "[DWFastLIO] ERROR: Failed to initialize sensor manager from rig: " 
+                      << dwGetStatusName(status) << std::endl;
+            return false;
+        }
+        
+        // Start sensor manager
+        CHECK_DW_ERROR(dwSensorManager_start(m_sensorManager));
+        
+        // Get LiDAR sensor
+        uint32_t lidarCount = 0;
+        CHECK_DW_ERROR(dwSensorManager_getNumSensors(&lidarCount, DW_SENSOR_LIDAR, m_sensorManager));
+        
+        if (lidarCount == 0) {
+            std::cerr << "[DWFastLIO] ERROR: No LiDAR sensors found in rig file!" << std::endl;
+            return false;
+        }
+        
+        if (lidarCount > 1) {
+            std::cout << "[DWFastLIO] WARNING: Multiple LiDAR sensors found, using first one" << std::endl;
+        }
+        
+        uint32_t lidarSensorIndex;
+        CHECK_DW_ERROR(dwSensorManager_getSensorIndex(&lidarSensorIndex, DW_SENSOR_LIDAR, 0, m_sensorManager));
+        CHECK_DW_ERROR(dwSensorManager_getSensorHandle(&m_lidarSensor, lidarSensorIndex, m_sensorManager));
+        CHECK_DW_ERROR(dwSensorLidar_getProperties(&m_lidarProperties, m_lidarSensor));
+        
+        m_pointCloudCapacity = m_lidarProperties.pointsPerSecond * 2;
+        m_pointCloudBuffer.reset(new dwLidarPointXYZI[m_pointCloudCapacity]);
+        
+        std::cout << "[DWFastLIO] LiDAR initialized from rig: " << m_lidarProperties.deviceString << std::endl;
+        
+        // Get IMU sensor
+        uint32_t imuCount = 0;
+        CHECK_DW_ERROR(dwSensorManager_getNumSensors(&imuCount, DW_SENSOR_IMU, m_sensorManager));
+        
+        if (imuCount == 0) {
+            std::cerr << "[DWFastLIO] ERROR: No IMU sensors found in rig file!" << std::endl;
+            return false;
+        }
+        
+        if (imuCount > 1) {
+            std::cout << "[DWFastLIO] WARNING: Multiple IMU sensors found, using first one" << std::endl;
+        }
+        
+        uint32_t imuSensorIndex;
+        CHECK_DW_ERROR(dwSensorManager_getSensorIndex(&imuSensorIndex, DW_SENSOR_IMU, 0, m_sensorManager));
+        CHECK_DW_ERROR(dwSensorManager_getSensorHandle(&m_imuSensor, imuSensorIndex, m_sensorManager));
+        
+        std::cout << "[DWFastLIO] IMU initialized from rig" << std::endl;
+        
+        // Get GPS sensor (optional)
+        uint32_t gpsCount = 0;
+        CHECK_DW_ERROR(dwSensorManager_getNumSensors(&gpsCount, DW_SENSOR_GPS, m_sensorManager));
+        
+        if (gpsCount > 0) {
+            uint32_t gpsSensorIndex;
+            CHECK_DW_ERROR(dwSensorManager_getSensorIndex(&gpsSensorIndex, DW_SENSOR_GPS, 0, m_sensorManager));
+            CHECK_DW_ERROR(dwSensorManager_getSensorHandle(&m_gpsSensor, gpsSensorIndex, m_sensorManager));
+            std::cout << "[DWFastLIO] GPS initialized from rig" << std::endl;
+        }
+        
+        // Extract LiDAR-to-IMU transform from rig
+        dwTransformation3f lidarToRig, imuToRig;
+        CHECK_DW_ERROR(dwRig_getSensorToRigTransformation(&lidarToRig, lidarSensorIndex, m_rigConfig));
+        CHECK_DW_ERROR(dwRig_getSensorToRigTransformation(&imuToRig, imuSensorIndex, m_rigConfig));
+        
+        // Compute lidar-to-IMU transform: T_lidar_imu = T_rig_imu^-1 * T_rig_lidar
+        // Convert to Eigen for easier computation
+        Eigen::Matrix4d T_rig_lidar = Eigen::Matrix4d::Identity();
+        Eigen::Matrix4d T_rig_imu = Eigen::Matrix4d::Identity();
+        
+        // Extract translation and rotation from DriveWorks transforms
+        // DriveWorks uses column-major: item(row,col) = array[row + col*4]
+        // Translation is in column 3, rows 0-2 (indices 12, 13, 14)
+        T_rig_lidar(0, 3) = lidarToRig.array[0 + 3*4];  // row 0, col 3
+        T_rig_lidar(1, 3) = lidarToRig.array[1 + 3*4];  // row 1, col 3
+        T_rig_lidar(2, 3) = lidarToRig.array[2 + 3*4];  // row 2, col 3
+        
+        // Rotation matrix is in rows 0-2, columns 0-2
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                T_rig_lidar(i, j) = lidarToRig.array[i + j*4];  // row i, col j (column-major)
+            }
+        }
+        
+        T_rig_imu(0, 3) = imuToRig.array[0 + 3*4];
+        T_rig_imu(1, 3) = imuToRig.array[1 + 3*4];
+        T_rig_imu(2, 3) = imuToRig.array[2 + 3*4];
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                T_rig_imu(i, j) = imuToRig.array[i + j*4];
+            }
+        }
+        
+        // Compute lidar-to-IMU: T_lidar_imu = T_rig_imu^-1 * T_rig_lidar
+        m_slamConfig.lidar_to_imu_transform = T_rig_imu.inverse() * T_rig_lidar;
+        
+        std::cout << "[DWFastLIO] LiDAR-to-IMU transform from rig:" << std::endl;
+        std::cout << "[DWFastLIO]   Translation: [" 
+                  << m_slamConfig.lidar_to_imu_transform(0, 3) << ", "
+                  << m_slamConfig.lidar_to_imu_transform(1, 3) << ", "
+                  << m_slamConfig.lidar_to_imu_transform(2, 3) << "]" << std::endl;
+        
+        return (m_lidarSensor != DW_NULL_HANDLE) && (m_imuSensor != DW_NULL_HANDLE);
+    }
+    
+    bool initializeSensorsFromParams() {
         // Initialize LiDAR
         std::string lidarParams = getArgument("lidar-params");
         std::string lidarProtocol = getArgument("lidar-protocol");
@@ -183,6 +329,9 @@ public:
             CHECK_DW_ERROR(dwSensor_start(m_gpsSensor));
             std::cout << "[DWFastLIO] GPS initialized" << std::endl;
         }
+        
+        // Use identity transform if no extrinsics provided
+        m_slamConfig.lidar_to_imu_transform = Eigen::Matrix4d::Identity();
         
         return (m_lidarSensor != DW_NULL_HANDLE) && (m_imuSensor != DW_NULL_HANDLE);
     }
@@ -252,216 +401,152 @@ public:
     }
     
     void onProcess() override {
-        // Ultra-conservative processing: Only process minimal data per frame
-        // Target: 5-6 FPS, so we have ~166ms per frame, but keep processing very light
-        // IMPORTANT: feedLiDAR() conversion can block - we need to limit scan size or make it async
-        
-        // Read IMU - use reasonable timeout (DriveWorks samples use 10ms)
-        if (m_imuSensor != DW_NULL_HANDLE) {
-            static int imu_read_attempts = 0;
-            static int imu_read_success = 0;
-            
-            // Read multiple IMU frames per cycle to drain buffer
-            for (int i = 0; i < 10; ++i) { // Process up to 10 IMU frames max
-                dwIMUFrame imuFrame;
-                // Use 10ms timeout like DriveWorks IMU sample - IMU data comes at high frequency
-                dwStatus status = dwSensorIMU_readFrame(&imuFrame, 10000, m_imuSensor); // 10ms timeout
-                
-                imu_read_attempts++;
-                
-                if (status == DW_SUCCESS) {
-                    imu_read_success++;
-                    m_latestIMU = imuFrame;
+        // When using rig: single acquireNextEvent() loop (same as egomotion_pomo).
+        // One Sensor Manager → one connection; IMU and GPS from same port are demultiplexed by the plugin.
+        if (m_sensorManager != DW_NULL_HANDLE) {
+            processEventsFromSensorManager();
+            return;
+        }
+        // Params path: no Sensor Manager, use per-sensor readFrame/readPacket.
+        processSensorsDirect();
+    }
+
+    // Rig path: single event loop (IMU + GPS from same port via one connection).
+    void processEventsFromSensorManager() {
+        constexpr int MAX_PROCESS_TIME_MS = 50;
+        constexpr int MAX_EVENTS_PER_FRAME = 256;
+        auto processStart = std::chrono::steady_clock::now();
+        int eventsProcessed = 0;
+
+        while (eventsProcessed < MAX_EVENTS_PER_FRAME) {
+            auto elapsed = std::chrono::steady_clock::now() - processStart;
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > MAX_PROCESS_TIME_MS)
+                break;
+
+            const dwSensorEvent* acquiredEvent = nullptr;
+            dwStatus status = dwSensorManager_acquireNextEvent(&acquiredEvent, 0, m_sensorManager);
+
+            if (status == DW_TIME_OUT)
+                break;
+            if (status != DW_SUCCESS) {
+                if (status == DW_END_OF_STREAM)
+                    std::cout << "[DWFastLIO] Sensor manager end of stream" << std::endl;
+                break;
+            }
+
+            switch (acquiredEvent->type) {
+                case DW_SENSOR_IMU: {
+                    const dwIMUFrame& imu = acquiredEvent->imuFrame;
+                    m_latestIMU = imu;
                     m_hasIMU = true;
-                    m_slam->feedIMU(imuFrame, imuFrame.hostTimestamp);
-                    
-                    // Log first few successful reads
-                    if (imu_read_success <= 5) {
-                        std::cout << "[DWFastLIO] IMU read SUCCESS #" << imu_read_success 
-                                  << " (attempts: " << imu_read_attempts << ")" << std::endl;
-                    }
-                } else if (status == DW_TIME_OUT || status == DW_NOT_READY || status == DW_NOT_AVAILABLE) {
-                    // Normal - no more IMU data available right now
+                    if (m_slam)
+                        m_slam->feedIMU(imu, imu.hostTimestamp);
                     break;
-                } else {
-                    // Other error - log it
-                    if (imu_read_attempts <= 5) {
-                        std::cout << "[DWFastLIO] IMU read error: " << dwGetStatusName(status) 
-                                  << " (attempt #" << imu_read_attempts << ")" << std::endl;
+                }
+                case DW_SENSOR_GPS: {
+                    if (m_hasIMU && m_slam) {
+                        const dwGPSFrame& gps = acquiredEvent->gpsFrame;
+                        m_slam->feedGPS(gps, m_latestIMU, gps.timestamp_us);
                     }
                     break;
                 }
-            }
-        } else {
-            static bool warned = false;
-            if (!warned) {
-                std::cout << "[DWFastLIO] WARNING: IMU sensor handle is NULL!" << std::endl;
-                warned = true;
-            }
-        }
-        
-        // Read GPS - only process a few frames per cycle
-        if (m_gpsSensor != DW_NULL_HANDLE && m_hasIMU) {
-            for (int i = 0; i < 2; ++i) { // Process only 2 GPS frames max
-                dwGPSFrame gpsFrame;
-                dwStatus status = dwSensorGPS_readFrame(&gpsFrame, 0, m_gpsSensor); // Non-blocking
-                
-                if (status == DW_SUCCESS) {
-                    m_slam->feedGPS(gpsFrame, m_latestIMU, gpsFrame.timestamp_us);
-                } else {
-                    break; // No more data available
-                }
-            }
-        }
-        
-        // Read LiDAR packets - accumulate complete 360° scans (like DriveWorks lidar_replay sample)
-        // CRITICAL: Return packets IMMEDIATELY after copying to avoid queue overflow
-        // Fast-LIO expects complete scans, not individual packets
-        // Using CPU memory (dwLidarPointXYZI) - no GPU-CPU copy overhead
-        if (m_lidarSensor != DW_NULL_HANDLE) {
-            static int totalPacketsRead = 0;
-            static int totalScansComplete = 0;
-            static int packetsInCurrentScan = 0;
-            
-            // Time budget: onProcess() should return quickly (target: <50ms for 6 FPS)
-            auto processStart = std::chrono::steady_clock::now();
-            const auto MAX_PROCESS_TIME_MS = 50;
-            
-            // Read packets in a loop until we get a complete scan or timeout
-            // Use shorter timeout (10ms) to avoid blocking too long
-            while (true) {
-                // Check time budget - must return quickly to avoid queue overflow
-                auto elapsed = std::chrono::steady_clock::now() - processStart;
-                if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > MAX_PROCESS_TIME_MS) {
-                    if (totalPacketsRead <= 20) {
-                        std::cout << "[DWFastLIO] Time budget exceeded, returning from onProcess()" << std::endl;
-                    }
-                    break; // Return to avoid blocking
-                }
-                
-                const dwLidarDecodedPacket* packet;
-                // Use 10ms timeout - short enough to avoid blocking, long enough for packets
-                dwStatus status = dwSensorLidar_readPacket(&packet, 10000, m_lidarSensor); // 10ms timeout
-                
-                if (status == DW_SUCCESS) {
-                    totalPacketsRead++;
-                    packetsInCurrentScan++;
-                    
-                    // Log first few packets
-                    if (totalPacketsRead <= 15) {
-                        std::cout << "[DWFastLIO] Read packet #" << totalPacketsRead 
-                                  << ": " << packet->nPoints << " points, scanComplete=" 
-                                  << packet->scanComplete << ", accumulated=" << m_pointCloudSize << std::endl;
-                    }
-                    
-                    // Accumulate points into CPU buffer (no GPU-CPU copy - already CPU memory)
+                case DW_SENSOR_LIDAR: {
+                    const dwLidarDecodedPacket* packet = acquiredEvent->lidFrame;
+                    if (!packet) break;
+                    // Copy packet data before releasing event
                     if (m_pointCloudSize + packet->nPoints <= m_pointCloudCapacity) {
-                        // Direct memcpy - CPU to CPU, no GPU involved
                         memcpy(&m_pointCloudBuffer[m_pointCloudSize], packet->pointsXYZI,
                                packet->nPoints * sizeof(dwLidarPointXYZI));
                         m_pointCloudSize += packet->nPoints;
                     } else {
-                        // Buffer full - this shouldn't happen, but handle it
-                        std::cout << "[DWFastLIO] ERROR: Point cloud buffer full! Dropping scan." << std::endl;
-                        m_pointCloudSize = 0; // Reset
-                        packetsInCurrentScan = 0;
-                        dwSensorLidar_returnPacket(packet, m_lidarSensor);
+                        m_pointCloudSize = 0;
+                        dwSensorManager_releaseAcquiredEvent(acquiredEvent, m_sensorManager);
+                        acquiredEvent = nullptr;
                         break;
                     }
-                    
-                    // CRITICAL: Return packet IMMEDIATELY after copying to avoid queue overflow
-                    // Don't wait for scanComplete to return the packet!
                     bool isScanComplete = packet->scanComplete;
-                    dwSensorLidar_returnPacket(packet, m_lidarSensor);
-                    
-                    // When scan complete, feed COMPLETE 360° scan to SLAM
-                    // Fast-LIO expects complete scans, not individual packets
-                    if (isScanComplete && m_pointCloudSize > 0) {
-                        totalScansComplete++;
-                        std::cout << "[DWFastLIO] ===== Complete 360° scan #" << totalScansComplete 
-                                  << ": " << m_pointCloudSize << " points from " << packetsInCurrentScan 
-                                  << " packets - feeding to SLAM =====" << std::flush << std::endl;
-                        
-                        // Check if SLAM is initialized
-                        if (!m_slam) {
-                            std::cout << "[DWFastLIO] ERROR: m_slam is NULL! Cannot feed scan." << std::endl;
-                            m_pointCloudSize = 0;
-                            packetsInCurrentScan = 0;
-                            break;
-                        }
-                        
-                        std::cout << "[DWFastLIO] [MAIN] About to call feedLiDAR() with " << m_pointCloudSize 
-                                  << " points, timestamp=" << packet->hostTimestamp << std::flush << std::endl;
-                        
-                        // Validate inputs before calling
-                        if (!m_pointCloudBuffer) {
-                            std::cerr << "[DWFastLIO] [MAIN] ERROR: m_pointCloudBuffer is NULL!" << std::endl;
-                            m_pointCloudSize = 0;
-                            packetsInCurrentScan = 0;
-                            break;
-                        }
-                        if (m_pointCloudSize == 0) {
-                            std::cerr << "[DWFastLIO] [MAIN] ERROR: m_pointCloudSize is 0!" << std::endl;
-                            m_pointCloudSize = 0;
-                            packetsInCurrentScan = 0;
-                            break;
-                        }
-                        
-                        std::cout << "[DWFastLIO] [MAIN] Validated inputs, calling feedLiDAR()..." << std::flush << std::endl;
-                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: About to call feedLiDAR, m_slam=" 
-                                  << (void*)m_slam.get() << std::flush << std::endl;
-                        
-                        // WARNING: feedLiDAR will convert points synchronously - this can block!
-                        // For large scans (15K+ points), this conversion takes time
-                        auto feedStart = std::chrono::steady_clock::now();
-                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: Entering try block..." << std::flush << std::endl;
+                    dwTime_t packetTimestamp = packet->hostTimestamp;
+                    dwSensorManager_releaseAcquiredEvent(acquiredEvent, m_sensorManager);
+                    acquiredEvent = nullptr;
+
+                    if (isScanComplete && m_pointCloudSize > 0 && m_slam && m_pointCloudBuffer) {
                         try {
-                            std::cerr << "[DWFastLIO] [MAIN] CRITICAL: Testing object callability..." << std::flush << std::endl;
-                        m_slam->testFunction();
-                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: testFunction() returned, calling feedLiDAR()..." << std::flush << std::endl;
-                            m_slam->feedLiDAR(m_pointCloudBuffer.get(), m_pointCloudSize, packet->hostTimestamp);
-                            std::cerr << "[DWFastLIO] [MAIN] CRITICAL: feedLiDAR() returned!" << std::flush << std::endl;
-                            std::cout << "[DWFastLIO] [MAIN] feedLiDAR() returned successfully" << std::flush << std::endl;
+                            m_slam->feedLiDAR(m_pointCloudBuffer.get(), m_pointCloudSize, packetTimestamp);
                         } catch (const std::exception& e) {
-                            std::cerr << "[DWFastLIO] [MAIN] ERROR: Exception in feedLiDAR(): " << e.what() << std::endl;
+                            std::cerr << "[DWFastLIO] feedLiDAR exception: " << e.what() << std::endl;
                         } catch (...) {
-                            std::cerr << "[DWFastLIO] [MAIN] ERROR: Unknown exception in feedLiDAR()" << std::endl;
+                            std::cerr << "[DWFastLIO] feedLiDAR unknown exception" << std::endl;
                         }
-                        std::cerr << "[DWFastLIO] [MAIN] CRITICAL: Exited try block" << std::flush << std::endl;
-                        auto feedTime = std::chrono::steady_clock::now() - feedStart;
-                        auto feedMs = std::chrono::duration_cast<std::chrono::milliseconds>(feedTime).count();
-                        
-                        std::cout << "[DWFastLIO] [MAIN] feedLiDAR() completed in " << feedMs << "ms" << std::flush << std::endl;
-                        
-                        if (feedMs > 50) {
-                            std::cout << "[DWFastLIO] [MAIN] WARNING: feedLiDAR took " << feedMs 
-                                      << "ms (this blocks the main thread!)" << std::endl;
-                        }
-                        
-                        m_pointCloudSize = 0; // Reset for next scan
-                        packetsInCurrentScan = 0;
-                        break; // Got complete scan, exit loop
-                    }
-                } else if (status == DW_TIME_OUT) {
-                    // Timeout - no more packets available right now
-                    // If we have accumulated points but scan not complete, keep them for next frame
-                    // This is normal - packets arrive asynchronously
-                    break;
-                } else if (status == DW_END_OF_STREAM) {
-                    // End of stream
-                    std::cout << "[DWFastLIO] LiDAR end of stream" << std::endl;
-                    break;
-                } else if (status == DW_NOT_READY || status == DW_NOT_AVAILABLE) {
-                    // Not ready - normal, just exit
-                    break;
-                } else {
-                    // Other error - log it
-                    static int error_count = 0;
-                    if (++error_count <= 5) {
-                        std::cout << "[DWFastLIO] LiDAR read error: " << dwGetStatusName(status) << std::endl;
+                        m_pointCloudSize = 0;
                     }
                     break;
                 }
+                default:
+                    break;
+            }
+
+            if (acquiredEvent)
+                dwSensorManager_releaseAcquiredEvent(acquiredEvent, m_sensorManager);
+            ++eventsProcessed;
+        }
+    }
+
+    // Params path: per-sensor readFrame/readPacket (used when not using rig).
+    void processSensorsDirect() {
+        if (m_imuSensor != DW_NULL_HANDLE) {
+            for (int i = 0; i < 10; ++i) {
+                dwIMUFrame imuFrame;
+                dwStatus status = dwSensorIMU_readFrame(&imuFrame, 10000, m_imuSensor);
+                if (status == DW_SUCCESS) {
+                    m_latestIMU = imuFrame;
+                    m_hasIMU = true;
+                    if (m_slam) m_slam->feedIMU(imuFrame, imuFrame.hostTimestamp);
+                } else if (status == DW_TIME_OUT || status == DW_NOT_READY || status == DW_NOT_AVAILABLE)
+                    break;
+                else break;
+            }
+        }
+        if (m_gpsSensor != DW_NULL_HANDLE && m_hasIMU && m_slam) {
+            for (int i = 0; i < 2; ++i) {
+                dwGPSFrame gpsFrame;
+                if (dwSensorGPS_readFrame(&gpsFrame, 0, m_gpsSensor) != DW_SUCCESS)
+                    break;
+                m_slam->feedGPS(gpsFrame, m_latestIMU, gpsFrame.timestamp_us);
+            }
+        }
+        if (m_lidarSensor != DW_NULL_HANDLE) {
+            const auto MAX_PROCESS_TIME_MS = 50;
+            auto processStart = std::chrono::steady_clock::now();
+            while (true) {
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - processStart).count() > MAX_PROCESS_TIME_MS)
+                    break;
+                const dwLidarDecodedPacket* packet = nullptr;
+                dwStatus status = dwSensorLidar_readPacket(&packet, 10000, m_lidarSensor);
+                if (status != DW_SUCCESS) break;
+                if (m_pointCloudSize + packet->nPoints <= m_pointCloudCapacity) {
+                    memcpy(&m_pointCloudBuffer[m_pointCloudSize], packet->pointsXYZI,
+                           packet->nPoints * sizeof(dwLidarPointXYZI));
+                    m_pointCloudSize += packet->nPoints;
+                } else {
+                    m_pointCloudSize = 0;
+                    dwSensorLidar_returnPacket(packet, m_lidarSensor);
+                    break;
+                }
+                bool isScanComplete = packet->scanComplete;
+                dwTime_t packetTimestamp = packet->hostTimestamp;
+                dwSensorLidar_returnPacket(packet, m_lidarSensor);
+                if (isScanComplete && m_pointCloudSize > 0 && m_slam && m_pointCloudBuffer) {
+                    try {
+                        m_slam->feedLiDAR(m_pointCloudBuffer.get(), m_pointCloudSize, packetTimestamp);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[DWFastLIO] feedLiDAR exception: " << e.what() << std::endl;
+                    } catch (...) {
+                        std::cerr << "[DWFastLIO] feedLiDAR unknown exception" << std::endl;
+                    }
+                    m_pointCloudSize = 0;
+                }
+                if (isScanComplete) break;
             }
         }
     }
@@ -481,9 +566,14 @@ public:
         try {
             pose = m_slam->getCurrentPose();
         } catch (...) {
-            // If getCurrentPose fails, use identity
             pose = Eigen::Matrix4d::Identity();
         }
+        // Detect invalid pose (e.g. timestamp-unit drift: position in billions)
+        const double kMaxReasonablePos = 1e6;
+        bool poseValid = std::isfinite(pose(0,3)) && std::isfinite(pose(1,3)) && std::isfinite(pose(2,3))
+                         && std::fabs(pose(0,3)) < kMaxReasonablePos
+                         && std::fabs(pose(1,3)) < kMaxReasonablePos
+                         && std::fabs(pose(2,3)) < kMaxReasonablePos;
         
         // Render map - only render subset of points for performance (max 50K points)
         auto mapCloud = m_slam->getMapCloud();
@@ -544,19 +634,20 @@ public:
             }
         }
         
-        // Render trajectory - limit to recent points
+        // Render trajectory (green line) - only when pose is valid; otherwise trajectory is huge and draws a single long line
         auto trajectory = m_slam->getTrajectory();
-        if (!trajectory.empty()) {
+        if (poseValid && !trajectory.empty()) {
             const size_t MAX_TRAJ_POINTS = 1000; // Limit trajectory rendering
             size_t startIdx = trajectory.size() > MAX_TRAJ_POINTS ? trajectory.size() - MAX_TRAJ_POINTS : 0;
             
             std::vector<dwVector3f> trajPoints;
             trajPoints.reserve(trajectory.size() - startIdx);
-            
             for (size_t i = startIdx; i < trajectory.size(); ++i) {
-                trajPoints.push_back({static_cast<float32_t>(trajectory[i](0,3)),
-                                     static_cast<float32_t>(trajectory[i](1,3)),
-                                     static_cast<float32_t>(trajectory[i](2,3))});
+                double x = trajectory[i](0,3), y = trajectory[i](1,3), z = trajectory[i](2,3);
+                if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)
+                    && std::fabs(x) < kMaxReasonablePos && std::fabs(y) < kMaxReasonablePos && std::fabs(z) < kMaxReasonablePos) {
+                    trajPoints.push_back({static_cast<float32_t>(x), static_cast<float32_t>(y), static_cast<float32_t>(z)});
+                }
             }
             
             if (!trajPoints.empty()) {
@@ -581,10 +672,9 @@ public:
         dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_16, m_renderEngine);
         dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
         
-        std::string poseText = "Position: " + 
-                              std::to_string(pose(0,3)) + ", " +
-                              std::to_string(pose(1,3)) + ", " +
-                              std::to_string(pose(2,3));
+        std::string poseText = poseValid
+            ? ("Position: " + std::to_string(pose(0,3)) + ", " + std::to_string(pose(1,3)) + ", " + std::to_string(pose(2,3)))
+            : "Position: (invalid - check timestamp units)";
         
         dwRenderEngine_renderText2D(m_statusMessage.c_str(), {20.f, static_cast<float32_t>(getWindowHeight()) - 30.f}, m_renderEngine);
         dwRenderEngine_renderText2D(poseText.c_str(), {20.f, static_cast<float32_t>(getWindowHeight()) - 50.f}, m_renderEngine);
@@ -656,6 +746,15 @@ public:
             dwSAL_releaseSensor(m_gpsSensor);
         }
         
+        // Release sensor manager and rig
+        if (m_sensorManager != DW_NULL_HANDLE) {
+            dwSensorManager_stop(m_sensorManager);
+            dwSensorManager_release(m_sensorManager);
+        }
+        if (m_rigConfig != DW_NULL_HANDLE) {
+            dwRig_release(m_rigConfig);
+        }
+        
         // Release DriveWorks
         if (m_sal != DW_NULL_HANDLE) {
             dwSAL_release(m_sal);
@@ -683,6 +782,7 @@ int main(int argc, const char** argv) {
     
     // Program arguments
     ProgramArguments args(argc, argv, {
+        ProgramArguments::Option_t("rig-file", "", "Path to rig.json configuration file (alternative to individual sensor params)"),
         ProgramArguments::Option_t("lidar-protocol", "lidar.virtual"),
         ProgramArguments::Option_t("lidar-params", "file=/path/to/lidar.bin"),
         ProgramArguments::Option_t("imu-protocol", "imu.virtual"),

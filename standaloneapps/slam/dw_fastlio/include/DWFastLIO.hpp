@@ -169,6 +169,9 @@ private:
     // Map (protected by mutex for thread safety)
     pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud_;
     
+    // First LiDAR timestamp (same unit as header.stamp) so we pass relative time to LSD
+    uint64_t first_lidar_stamp_us_;
+    
     // Processing threads
     std::unique_ptr<std::thread> processing_thread_;
     bool thread_running_;

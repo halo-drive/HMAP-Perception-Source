@@ -35,9 +35,10 @@ namespace fusionengine {
 
 //------------------------------------------------------------------------------
 // LiDAR Detection Packet
-// NOTE: This layout must match the binary packet sent by the lidar producer
-// (same as DetectionPacket in the lidar visualization sample), but we keep
-// it self-contained here instead of including that header.
+// Layout must match DetectionPacket in
+// lidar_object_detection_interprocess_communiation/DetectionPacket.hpp exactly
+// (same sizes and field order) so that sizeof(LidarDetectionPacket) equals
+// the producer's packet size and the stream stays in sync.
 //------------------------------------------------------------------------------
 struct LidarDetectionPacket
 {
@@ -68,10 +69,12 @@ struct LidarDetectionPacket
     };
     GroundPlane groundPlane;
 
+    // Must match producer: FreeSpaceData has MAX_FREE_SPACE_POINTS = 50000
+    static constexpr uint32_t MAX_FREE_SPACE_POINTS = 50000;
     struct FreeSpace
     {
         uint32_t numPoints;
-        float points[360 * 3];
+        float points[MAX_FREE_SPACE_POINTS * 3];
     };
     FreeSpace freeSpace;
 
@@ -303,11 +306,17 @@ private:
         frameData.groundPlane.offset = packet.groundPlane.offset;
         frameData.groundPlane.valid = packet.groundPlane.valid;
 
-        // Copy free space
-        frameData.freeSpace.numPoints = packet.freeSpace.numPoints;
-        std::memcpy(frameData.freeSpace.points,
-                    packet.freeSpace.points,
-                    sizeof(packet.freeSpace.points));
+        // Copy free space (FusedPacket uses MAX_FREE_SPACE_POINTS=360; truncate if needed)
+        const uint32_t maxFreeSpace = static_cast<uint32_t>(
+            sizeof(frameData.freeSpace.points) / (sizeof(float) * 3));
+        frameData.freeSpace.numPoints =
+            std::min(packet.freeSpace.numPoints, maxFreeSpace);
+        if (frameData.freeSpace.numPoints > 0)
+        {
+            std::memcpy(frameData.freeSpace.points,
+                        packet.freeSpace.points,
+                        frameData.freeSpace.numPoints * 3 * sizeof(float));
+        }
 
         frameData.valid = true;
     }

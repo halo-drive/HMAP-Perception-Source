@@ -34,6 +34,7 @@ DWFastLIO::DWFastLIO()
     : initialized_(false)
     , mapping_mode_(true)
     , thread_running_(false)
+    , first_lidar_stamp_us_(0)
 {
     current_pose_ = Eigen::Matrix4d::Identity();
     map_cloud_.reset(new pcl::PointCloud<pcl::PointXYZI>());
@@ -102,8 +103,14 @@ void DWFastLIO::feedIMU(const dwIMUFrame& dwImu, dwTime_t timestamp) {
         return;
     }
     
+    // Use same time origin as LiDAR (relative time so LSD EKF doesn't see huge dt on first frame)
+    uint64_t stamp_us = static_cast<uint64_t>(timestamp);
+    if (stamp_us > 1000000000000000ULL) stamp_us /= 1000;
+    if (first_lidar_stamp_us_ == 0) first_lidar_stamp_us_ = stamp_us;
+    
     ::ImuType lsdImu;
     dwIMUToLSD(dwImu, lsdImu, timestamp);
+    lsdImu.stamp -= static_cast<double>(first_lidar_stamp_us_) / 1e6;  // relative seconds
     
     size_t imu_buffer_size = 0;
     {
@@ -134,11 +141,29 @@ void DWFastLIO::feedGPS(const dwGPSFrame& gpsFrame, const dwIMUFrame& imuFrame, 
     ::RTKType lsdRTK;
     dwGPSToLSD(gpsFrame, imuFrame, lsdRTK, timestamp);
     
+    // Use same time origin as LiDAR/IMU (relative microseconds for LSD sync)
+    uint64_t stamp_us = static_cast<uint64_t>(timestamp);
+    if (stamp_us > 1000000000000000ULL) stamp_us /= 1000;
+    if (first_lidar_stamp_us_ == 0) first_lidar_stamp_us_ = stamp_us;
+    lsdRTK.timestamp = stamp_us - first_lidar_stamp_us_;
+    
+    // Feed into Fast-LIO backend (INS/RTK for velocity constraint and graph; LSD uses meas.ins when wheelspeed_en or GNSS observation is used)
+    bool rtk_valid = (lsdRTK.status != 0);
+    fastlio_ins_enqueue(rtk_valid, lsdRTK);
+    
+    static int gps_fed_count = 0;
+    gps_fed_count++;
+    if (gps_fed_count <= 5) {
+        std::cout << "[DWFastLIO] GPS/RTK fed to Fast-LIO #" << gps_fed_count
+                  << " valid=" << (rtk_valid ? 1 : 0)
+                  << " (lat=" << lsdRTK.latitude << ", lon=" << lsdRTK.longitude << ")" << std::endl;
+    } else if (rtk_valid && gps_fed_count == 6) {
+        std::cout << "[DWFastLIO] GPS/RTK fed to Fast-LIO (valid fix); further feeds not logged" << std::endl;
+    }
+    
     {
         std::lock_guard<std::mutex> lock(gps_mutex_);
         gps_buffer_.push_back({lsdRTK, timestamp});
-        
-        // Aggressively limit buffer size (last 50 GPS samples)
         while (gps_buffer_.size() > 50) {
             gps_buffer_.pop_front();
         }
@@ -319,9 +344,19 @@ __attribute__((noinline)) void DWFastLIO::feedLiDAR(const dwLidarPointXYZI* poin
         fclose(f);
     }
     
-    // Set timestamp - Fast-LIO expects microseconds (it divides by 1e6 to get seconds)
-    // PCL header.stamp can be in any unit, but Fast-LIO divides by 1e6, so use microseconds
-    pclCloud->header.stamp = timestamp; // Use microseconds directly (DriveWorks timestamp is already in microseconds)
+    // Set timestamp - Fast-LIO expects microseconds (it divides by 1e6 to get seconds).
+    // DriveWorks docs say hostTimestamp is in microseconds, but some sensors/contexts give nanoseconds.
+    // If value is > 1e15, it's likely nanoseconds; convert to microseconds.
+    // CRITICAL: LSD's EKF uses dt = meas.lidar_beg_time - last_lidar_end_time_; on first frame last_lidar_end_time_=0,
+    // so if we pass absolute time (e.g. 1.77e6 s), dt becomes huge and position explodes. Use RELATIVE time (us since first scan).
+    uint64_t stamp_us = static_cast<uint64_t>(timestamp);
+    if (stamp_us > 1000000000000000ULL) {  // 1e15 - likely nanoseconds
+        stamp_us /= 1000;
+    }
+    if (first_lidar_stamp_us_ == 0) {
+        first_lidar_stamp_us_ = stamp_us;
+    }
+    pclCloud->header.stamp = stamp_us - first_lidar_stamp_us_;
     
     f = fopen("/tmp/dwfastlio_debug.log", "a");
     if (f) {
@@ -495,12 +530,13 @@ void DWFastLIO::processScan() {
         cloudAttr->cloud = cloud;
         cloudAttr->T = Eigen::Matrix4d::Identity();
         
-        // CRITICAL: Fast-LIO's velodyne_handler() accesses pl_orig->attr[i].stamp for each point
-        // We must populate attr vector with one entry per point
+        // CRITICAL: Fast-LIO's velodyne_handler() accesses pl_orig->attr[i].stamp for each point.
+        // PointAttr.stamp is uint32_t; full microsecond timestamp can overflow. Use 0 for single-scan
+        // (scan time is in cloud->header.stamp); LSD time_buffer uses header.stamp only.
         cloudAttr->attr.resize(cloud->size());
         for (size_t i = 0; i < cloud->size(); ++i) {
             cloudAttr->attr[i].id = static_cast<int>(i);
-            cloudAttr->attr[i].stamp = cloud->header.stamp; // Use cloud timestamp for all points
+            cloudAttr->attr[i].stamp = 0;
         }
         
         // Ensure cloud has valid header
@@ -692,54 +728,46 @@ void DWFastLIO::processScan() {
                 pcl::PointCloud<pcl::PointXYZI>::Ptr transformed(new pcl::PointCloud<pcl::PointXYZI>());
                 pcl::transformPointCloud(*cloud, *transformed, odom_end);
                 
+                // Voxel-downsample the new scan before adding (avoids unbounded growth and prevents
+                // "vanishing" from full-map voxel replace every N scans)
+                pcl::PointCloud<pcl::PointXYZI>::Ptr scan_voxeled(new pcl::PointCloud<pcl::PointXYZI>());
+                pcl::VoxelGrid<pcl::PointXYZI> scan_voxel;
+                scan_voxel.setLeafSize(config_.voxel_size, config_.voxel_size, config_.voxel_size);
+                scan_voxel.setInputCloud(transformed);
+                scan_voxel.filter(*scan_voxeled);
+                
                 if (processed_count <= 5) {
-                    std::cout << "[DWFastLIO] [PROCESS] Transformed " << transformed->size() << " points to world frame" << std::endl;
+                    std::cout << "[DWFastLIO] [PROCESS] Transformed " << transformed->size()
+                              << " -> voxeled " << scan_voxeled->size() << " points" << std::endl;
                 }
                 
-                // Add to map with voxel filtering (with mutex protection)
+                // Add voxel-downsampled scan to map (no full-map replace -> no visible "vanishing")
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     size_t map_size_before = map_cloud_ ? map_cloud_->size() : 0;
                     
-                    if (processed_count <= 5) {
-                        std::cout << "[DWFastLIO] [PROCESS] Map size before: " << map_size_before << " points" << std::endl;
-                    }
-                    
-                    // Add transformed points to map
-                    *map_cloud_ += *transformed;
-                    
+                    *map_cloud_ += *scan_voxeled;
                     size_t map_size_after_add = map_cloud_->size();
                     
                     if (processed_count <= 5) {
-                        std::cout << "[DWFastLIO] [PROCESS] Map size after adding scan: " << map_size_after_add << " points" << std::endl;
+                        std::cout << "[DWFastLIO] [PROCESS] Map size: " << map_size_before
+                                  << " -> " << map_size_after_add << " points" << std::endl;
                     }
                     
-                    // Only filter periodically to reduce CPU load (every 10th scan now)
+                    // Optional: full-map voxel every 100 scans to bound memory (less frequent = less flicker)
                     static int filter_counter = 0;
-                    if (++filter_counter % 10 == 0) { // Reduced frequency
-                        if (processed_count <= 10) {
-                            std::cout << "[DWFastLIO] [PROCESS] Running voxel filter (every 10th scan)..." << std::flush << std::endl;
-                        }
+                    if (++filter_counter % 100 == 0 && map_cloud_->size() > 500000) {
                         auto filterStart = std::chrono::steady_clock::now();
                         pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>());
                         pcl::VoxelGrid<pcl::PointXYZI> voxel_filter;
                         voxel_filter.setLeafSize(config_.voxel_size, config_.voxel_size, config_.voxel_size);
                         voxel_filter.setInputCloud(map_cloud_);
-                        voxel_filter.filter(*filtered); // Filter to new cloud, don't overwrite
-                        map_cloud_ = filtered; // Replace with filtered version
-                        auto filterTime = std::chrono::steady_clock::now() - filterStart;
-                        auto filterMs = std::chrono::duration_cast<std::chrono::milliseconds>(filterTime).count();
-                        
-                        std::cout << "[DWFastLIO] [PROCESS] Voxel filter: " << map_size_before << " -> " 
-                                  << map_size_after_add << " -> " << map_cloud_->size()
-                                  << " points (took " << filterMs << "ms)" << std::flush << std::endl;
-                    } else {
-                        // Log map growth occasionally
-                        static int growth_log_counter = 0;
-                        if (++growth_log_counter % 20 == 0) {
-                            std::cout << "[DWFastLIO] Map growing: " << map_size_before 
-                                      << " -> " << map_size_after_add << " points" << std::endl;
-                        }
+                        voxel_filter.filter(*filtered);
+                        map_cloud_ = filtered;
+                        auto filterMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - filterStart).count();
+                        std::cout << "[DWFastLIO] [PROCESS] Full-map voxel: " << map_size_after_add
+                                  << " -> " << map_cloud_->size() << " points (took " << filterMs << "ms)" << std::endl;
                     }
                 }
             }

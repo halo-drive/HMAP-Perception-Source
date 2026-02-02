@@ -1,0 +1,44 @@
+./sample_dw_fastlio_slam     --lidar-protocol=lidar.socket     --lidar-params="device=VELO_VLP16,ip=192.168.1.150,port=2368,scan-frequency=10"     --imu-protocol=imu.novatel     --imu-params="connection-type=ethernet,ip=192.168.1.153,port=2000"     --voxel-size=0.2 2>&1 | grep "\[DWFastLIO\]" > /usr/local/slam_logs.txt
+
+# ========== STRAIGHT ROAD: MAPPING THEN LOCALIZATION ==========
+# Option A (single run, no restart):
+#   1. Run app in MAPPING (default). Drive to end of road.
+#   2. At end: press M → switch to LOCALIZATION (map stays in memory).
+#   3. Drive backwards; pose is estimated against the map you just built.
+# Option B (save map, restart at start for clean localization test):
+#   1. Run in MAPPING, drive to end of road.
+#   2. Press S to save map (e.g. slam_map_xxx.pcd).
+#   3. Stop app, drive vehicle back to start.
+#   4. Run again with --map-file=/path/to/slam_map_xxx.pcd (starts in LOCALIZATION).
+#   5. Drive forward; you localize from the beginning with a clean run.
+# =============================================================
+
+# Preferred: rig file (IMU + GPS from same port via Sensor Manager, like egomotion_pomo)
+./sample_dw_fastlio_slam \
+    --rig-file=/usr/local/driveworks-5.20/samples/src/sensors/slam/dw_fastlio/rig.json \
+    --voxel-size=0.2
+
+# Or from the dw_fastlio folder:
+# ./sample_dw_fastlio_slam --rig-file=rig.json --voxel-size=0.2
+
+# Alternative: params (no rig) - use different ports for IMU vs GPS on Novatel
+./sample_dw_fastlio_slam \
+    --lidar-protocol=lidar.socket \
+    --lidar-params="device=VELO_VLP16HR,ip=192.168.1.151,port=2369,scan-frequency=10" \
+    --imu-protocol=imu.novatel \
+    --imu-params="connection-type=ethernet,ip=192.168.1.153,port=2000" \
+    --voxel-size=0.2
+
+
+# One-line params (GPS on port 2001 when not using rig)
+./sample_dw_fastlio_slam     --lidar-protocol=lidar.socket     --lidar-params="device=VELO_VLP16,ip=192.168.1.150,port=2368,scan-frequency=10"     --imu-protocol=imu.novatel     --imu-params="connection-type=ethernet,ip=192.168.1.153,port=2000"     --gps-protocol=gps.novatel     --gps-params="connection-type=ethernet,ip=192.168.1.153,port=2001"     --voxel-size=0.2 2>&1 | grep "\[DWFastLIO\]" > /usr/local/slam_logs.txt
+
+
+./sample_dw_fastlio_slam \
+    --lidar-protocol=lidar.socket \
+    --lidar-params="device=VELO_VLP16,ip=192.168.1.150,port=2368,scan-frequency=10" \
+    --imu-protocol=imu.novatel \
+    --imu-params="connection-type=ethernet,ip=192.168.1.153,port=2000" \
+    --gps-protocol=gps.novatel \
+    --gps-params="connection-type=ethernet,ip=192.168.1.153,port=2001" \
+    --voxel-size=0.2

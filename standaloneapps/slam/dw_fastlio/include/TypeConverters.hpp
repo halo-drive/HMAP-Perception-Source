@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <algorithm>
 
 #include <dw/sensors/lidar/LidarTypes.h>
@@ -137,8 +138,14 @@ inline size_t pclPointCloudToDW(const pcl::PointCloud<pcl::PointXYZI>::Ptr& pclC
  */
 inline void dwIMUToLSD(const dwIMUFrame& dwImu, ::ImuType& lsdImu, dwTime_t timestamp)
 {
-    // Timestamp (convert microseconds to seconds)
-    lsdImu.stamp = static_cast<double>(timestamp) / 1e6;
+    // Timestamp: DriveWorks is documented as microseconds; if value > 1e15 assume nanoseconds.
+    double stamp_sec = static_cast<double>(timestamp);
+    if (stamp_sec > 1e15) {
+        stamp_sec /= 1e9;  // nanoseconds -> seconds
+    } else {
+        stamp_sec /= 1e6;  // microseconds -> seconds
+    }
+    lsdImu.stamp = stamp_sec;
     
     // Acceleration (m/s²)
     lsdImu.acc = Eigen::Vector3d(dwImu.acceleration[0], 
@@ -193,6 +200,9 @@ inline void dwGPSToLSD(const dwGPSFrame& dwGPS, const dwIMUFrame& dwIMU, ::RTKTy
     
     // Status
     lsdRTK.status = (dwGPS.flags & DW_GPS_LAT) && (dwGPS.flags & DW_GPS_LON) ? 1 : 0;
+    
+    // Sensor source (LSD checks ins.sensor for "Wheel"; RTK/GPS use rtk_valid)
+    lsdRTK.sensor = "RTK";
     
     // Transform matrix (identity for now, can be computed from orientation)
     lsdRTK.T = Eigen::Matrix4d::Identity();

@@ -84,6 +84,9 @@ private:
     // Rendering helpers
     void renderLidarPointCloud();
     void renderDetections();
+    void renderLidarBoundingBoxes();  // Raw LiDAR boxes (when cameras disabled)
+    void renderFreeSpace();
+    void renderGroundPlane();
     void renderStatusOverlay();
     void render3DBox(const FusedDetection& det, const float* color);
 
@@ -105,6 +108,8 @@ private:
     // Render buffers
     uint32_t m_pointCloudBufferId{0};
     uint32_t m_detectionLineBufferId{0};
+    uint32_t m_freeSpaceBufferId{0};
+    uint32_t m_groundPlaneBufferId{0};
 
     // Fusion engine
     std::unique_ptr<FusionEngine> m_fusionEngine;
@@ -375,6 +380,26 @@ bool FusionEngineApp::initRenderBuffers()
         MAX_FUSED_DETECTIONS * 12,        // max line primitives
         m_renderEngine));
 
+    // Free space points (match lidar IPC visualization sample)
+    CHECK_DW_ERROR(dwRenderEngine_createBuffer(
+        &m_freeSpaceBufferId,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
+        sizeof(float) * 3,
+        0,
+        MAX_FREE_SPACE_POINTS,
+        m_renderEngine));
+
+    // Ground plane triangles (grid mesh like lidar IPC visualization sample)
+    const uint32_t GROUND_GRID_SIZE = 21;
+    const uint32_t groundTriangles = (GROUND_GRID_SIZE - 1) * (GROUND_GRID_SIZE - 1) * 2;
+    CHECK_DW_ERROR(dwRenderEngine_createBuffer(
+        &m_groundPlaneBufferId,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
+        sizeof(float) * 3,
+        0,
+        groundTriangles * 3,  // 3 vertices per triangle
+        m_renderEngine));
+
     return true;
 }
 
@@ -472,6 +497,10 @@ void FusionEngineApp::onRelease()
     {
         dwRenderEngine_destroyBuffer(m_pointCloudBufferId, m_renderEngine);
         dwRenderEngine_destroyBuffer(m_detectionLineBufferId, m_renderEngine);
+        if (m_freeSpaceBufferId != 0)
+            dwRenderEngine_destroyBuffer(m_freeSpaceBufferId, m_renderEngine);
+        if (m_groundPlaneBufferId != 0)
+            dwRenderEngine_destroyBuffer(m_groundPlaneBufferId, m_renderEngine);
     }
 
     // Release render engine
@@ -568,10 +597,22 @@ void FusionEngineApp::onRender()
         renderLidarPointCloud();
     }
 
-    // Render fused detections
+    // Render ground plane (like lidar_object_detection_ipc_visualization sample)
+    if (packet.valid && packet.lidarData.valid && packet.lidarData.groundPlane.valid)
+    {
+        renderGroundPlane();
+    }
+
+    // Render bounding boxes: fused detections when cameras enabled, else raw LiDAR boxes
     if (packet.valid)
     {
         renderDetections();
+    }
+
+    // Render free space (like lidar_object_detection_ipc_visualization sample)
+    if (packet.valid && packet.lidarData.valid && packet.lidarData.freeSpace.numPoints > 0)
+    {
+        renderFreeSpace();
     }
 
     // Render status overlay
@@ -639,8 +680,13 @@ void FusionEngineApp::renderDetections()
         packet = m_currentPacket;
     }
 
+    // When cameras disabled (LiDAR-only), fusedDetections is empty; draw raw LiDAR boxes
     if (packet.fusedDetections.empty())
     {
+        if (!packet.lidarData.detections.empty())
+        {
+            renderLidarBoundingBoxes();
+        }
         return;
     }
 
@@ -667,6 +713,258 @@ void FusionEngineApp::renderDetections()
 
         render3DBox(det, color);
     }
+}
+
+//------------------------------------------------------------------------------
+// Render LiDAR Bounding Boxes (raw detections when cameras disabled)
+// Matches lidar_object_detection_ipc_visualization: Vehicle=red, Pedestrian=green, Cyclist=blue
+//------------------------------------------------------------------------------
+void FusionEngineApp::renderLidarBoundingBoxes()
+{
+    FusedPacket packet;
+    {
+        std::lock_guard<std::mutex> lock(m_packetMutex);
+        packet = m_currentPacket;
+    }
+
+    const std::vector<LidarBoundingBox>& detections = packet.lidarData.detections;
+    if (detections.empty())
+    {
+        return;
+    }
+
+    // Group by class (same as 5.20 IPC visualization sample)
+    std::vector<const LidarBoundingBox*> vehicleBoxes;
+    std::vector<const LidarBoundingBox*> pedestrianBoxes;
+    std::vector<const LidarBoundingBox*> cyclistBoxes;
+
+    for (const auto& box : detections)
+    {
+        switch (box.classId)
+        {
+        case 0: vehicleBoxes.push_back(&box); break;
+        case 1: pedestrianBoxes.push_back(&box); break;
+        case 2: cyclistBoxes.push_back(&box); break;
+        default: vehicleBoxes.push_back(&box); break;
+        }
+    }
+
+    auto renderBoxGroup = [this](const std::vector<const LidarBoundingBox*>& boxes,
+                                  const float* color)
+    {
+        if (boxes.empty())
+            return;
+
+        const uint32_t verticesPerBox = 24;  // 12 edges * 2 vertices
+        const uint32_t totalVertices = static_cast<uint32_t>(boxes.size()) * verticesPerBox;
+        const uint32_t sizeBytes = totalVertices * 3U * sizeof(float);
+
+        float* buffer = nullptr;
+        CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
+            m_detectionLineBufferId,
+            reinterpret_cast<void**>(&buffer),
+            0,
+            sizeBytes,
+            DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
+            m_renderEngine));
+
+        uint32_t vertexIndex = 0;
+        int edges[12][2] = {
+            {0, 1}, {1, 2}, {2, 3}, {3, 0},
+            {4, 5}, {5, 6}, {6, 7}, {7, 4},
+            {0, 4}, {1, 5}, {2, 6}, {3, 7}
+        };
+
+        for (const LidarBoundingBox* pbox : boxes)
+        {
+            const LidarBoundingBox& box = *pbox;
+            float hw = box.width / 2.0f;
+            float hl = box.length / 2.0f;
+            float hh = box.height / 2.0f;
+            float cosR = std::cos(box.rotation);
+            float sinR = std::sin(box.rotation);
+
+            float localCorners[8][3] = {
+                {-hw, -hl, -hh}, {hw, -hl, -hh}, {hw, hl, -hh}, {-hw, hl, -hh},
+                {-hw, -hl, hh},  {hw, -hl, hh},  {hw, hl, hh},  {-hw, hl, hh}
+            };
+            float corners[8][3];
+            for (int i = 0; i < 8; ++i)
+            {
+                float x = localCorners[i][0];
+                float y = localCorners[i][1];
+                corners[i][0] = box.x + x * cosR - y * sinR;
+                corners[i][1] = box.y + x * sinR + y * cosR;
+                corners[i][2] = box.z + localCorners[i][2];
+            }
+
+            for (int i = 0; i < 12 && vertexIndex + 6 <= totalVertices * 3; ++i)
+            {
+                int v0 = edges[i][0];
+                int v1 = edges[i][1];
+                buffer[vertexIndex++] = corners[v0][0];
+                buffer[vertexIndex++] = corners[v0][1];
+                buffer[vertexIndex++] = corners[v0][2];
+                buffer[vertexIndex++] = corners[v1][0];
+                buffer[vertexIndex++] = corners[v1][1];
+                buffer[vertexIndex++] = corners[v1][2];
+            }
+        }
+
+        CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
+            m_detectionLineBufferId,
+            DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
+            m_renderEngine));
+
+        uint32_t numVertices = vertexIndex / 3;  // vertexIndex counts floats
+        if (numVertices > 0)
+        {
+            CHECK_DW_ERROR(dwRenderEngine_setColor(
+                {color[0], color[1], color[2], color[3]}, m_renderEngine));
+            CHECK_DW_ERROR(dwRenderEngine_setLineWidth(2.0f, m_renderEngine));
+            CHECK_DW_ERROR(dwRenderEngine_renderBuffer(
+                m_detectionLineBufferId, numVertices, m_renderEngine));
+        }
+    };
+
+    const float colorVehicle[] = {1.0f, 0.0f, 0.0f, 1.0f};
+    const float colorPedestrian[] = {0.0f, 1.0f, 0.0f, 1.0f};
+    const float colorCyclist[] = {0.0f, 0.0f, 1.0f, 1.0f};
+    renderBoxGroup(vehicleBoxes, colorVehicle);
+    renderBoxGroup(pedestrianBoxes, colorPedestrian);
+    renderBoxGroup(cyclistBoxes, colorCyclist);
+}
+
+//------------------------------------------------------------------------------
+// Render Free Space (like lidar_object_detection_ipc_visualization sample)
+//------------------------------------------------------------------------------
+void FusionEngineApp::renderFreeSpace()
+{
+    FusedPacket packet;
+    {
+        std::lock_guard<std::mutex> lock(m_packetMutex);
+        packet = m_currentPacket;
+    }
+
+    const auto& freeSpace = packet.lidarData.freeSpace;
+    if (freeSpace.numPoints == 0)
+    {
+        return;
+    }
+
+    uint32_t numPoints = std::min(freeSpace.numPoints, MAX_FREE_SPACE_POINTS);
+    uint32_t sizeBytes = numPoints * 3U * sizeof(float);
+
+    float* vertices = nullptr;
+    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
+        m_freeSpaceBufferId,
+        reinterpret_cast<void**>(&vertices),
+        0,
+        sizeBytes,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
+        m_renderEngine));
+
+    for (uint32_t i = 0; i < numPoints; ++i)
+    {
+        vertices[i * 3 + 0] = freeSpace.points[i * 3 + 0];
+        vertices[i * 3 + 1] = freeSpace.points[i * 3 + 1];
+        vertices[i * 3 + 2] = 0.0f;  // Free space at ground level
+    }
+
+    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
+        m_freeSpaceBufferId,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
+        m_renderEngine));
+
+    CHECK_DW_ERROR(dwRenderEngine_setColor({0.0f, 1.0f, 0.0f, 0.6f}, m_renderEngine));
+    CHECK_DW_ERROR(dwRenderEngine_setPointSize(3.0f, m_renderEngine));
+    CHECK_DW_ERROR(dwRenderEngine_renderBuffer(m_freeSpaceBufferId, numPoints, m_renderEngine));
+    CHECK_DW_ERROR(dwRenderEngine_setPointSize(m_pointSize, m_renderEngine));
+}
+
+//------------------------------------------------------------------------------
+// Render Ground Plane (like lidar_object_detection_ipc_visualization sample)
+//------------------------------------------------------------------------------
+void FusionEngineApp::renderGroundPlane()
+{
+    FusedPacket packet;
+    {
+        std::lock_guard<std::mutex> lock(m_packetMutex);
+        packet = m_currentPacket;
+    }
+
+    const GroundPlaneData& plane = packet.lidarData.groundPlane;
+    if (!plane.valid)
+    {
+        return;
+    }
+
+    const uint32_t GRID_SIZE = 21;
+    const uint32_t gridTriangles = (GRID_SIZE - 1) * (GRID_SIZE - 1) * 2;
+    const uint32_t gridVertices = gridTriangles * 3;
+    const uint32_t bufferSize = gridVertices * 3U * sizeof(float);
+
+    float* vertices = nullptr;
+    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
+        m_groundPlaneBufferId,
+        reinterpret_cast<void**>(&vertices),
+        0,
+        bufferSize,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
+        m_renderEngine));
+
+    const float gridSpacing = 10.0f;
+    const float gridStart = -100.0f;
+    uint32_t vertexIndex = 0;
+
+    auto calcZ = [&](float x, float y)
+    {
+        if (std::abs(plane.normalZ) > 0.01f)
+        {
+            return (-plane.offset - plane.normalX * x - plane.normalY * y) / plane.normalZ;
+        }
+        return 0.0f;
+    };
+
+    for (uint32_t i = 0; i < GRID_SIZE - 1; ++i)
+    {
+        for (uint32_t j = 0; j < GRID_SIZE - 1; ++j)
+        {
+            float x0 = gridStart + i * gridSpacing;
+            float y0 = gridStart + j * gridSpacing;
+            float x1 = x0 + gridSpacing;
+            float y1 = y0 + gridSpacing;
+
+            vertices[vertexIndex++] = x0;
+            vertices[vertexIndex++] = y0;
+            vertices[vertexIndex++] = calcZ(x0, y0);
+            vertices[vertexIndex++] = x1;
+            vertices[vertexIndex++] = y0;
+            vertices[vertexIndex++] = calcZ(x1, y0);
+            vertices[vertexIndex++] = x1;
+            vertices[vertexIndex++] = y1;
+            vertices[vertexIndex++] = calcZ(x1, y1);
+
+            vertices[vertexIndex++] = x0;
+            vertices[vertexIndex++] = y0;
+            vertices[vertexIndex++] = calcZ(x0, y0);
+            vertices[vertexIndex++] = x1;
+            vertices[vertexIndex++] = y1;
+            vertices[vertexIndex++] = calcZ(x1, y1);
+            vertices[vertexIndex++] = x0;
+            vertices[vertexIndex++] = y1;
+            vertices[vertexIndex++] = calcZ(x0, y1);
+        }
+    }
+
+    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
+        m_groundPlaneBufferId,
+        DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
+        m_renderEngine));
+
+    CHECK_DW_ERROR(dwRenderEngine_setColor({0.4f, 0.3f, 0.2f, 0.7f}, m_renderEngine));
+    CHECK_DW_ERROR(dwRenderEngine_renderBuffer(
+        m_groundPlaneBufferId, vertexIndex / 3, m_renderEngine));
 }
 
 //------------------------------------------------------------------------------
