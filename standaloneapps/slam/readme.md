@@ -13,23 +13,20 @@ The implementation features a pure DriveWorks-native solution without external P
 
 ## Features
 
--  Real-time LiDAR-inertial odometry using Fast-LIO algorithm
--  Multi-sensor fusion (LiDAR, IMU, GPS/RTK)
--  Thread-safe data processing with mutex locks
--  DriveWorks-native visualization
--  Map building and saving capabilities
--  Localization mode (load pre-built maps)
--  Type conversion layer between Fast-LIO and DriveWorks datatypes
+-  Real-time LiDAR-inertial odometry using Fast-LIO algorithm [ done ]
+-  Multi-sensor fusion (LiDAR, IMU, GPS/RTK) [ done ]
+-  Thread-safe data processing with mutex locks [ done ]
+-  DriveWorks-native visualization [ done ]
+-  Map building and saving capabilities [ pending ]
+-  Localization mode (load pre-built maps) [ pending ]
+-  Type conversion layer between Fast-LIO and DriveWorks datatypes [ done ]
 
 ## Dependencies
 
-### Required Libraries
-- **NVIDIA DriveWorks SDK** - Core framework for sensor handling and visualization
+### Essential Libraries
 - **PCL (Point Cloud Library)** 1.10+ - Point cloud processing
 - **Eigen3** - Linear algebra and transformations
-- **VTK** 7.1+ - Visualization support (via PCL)
 - **Boost** - Required by PCL
-- **GLFW** - Window management for visualization
 
 
 ## Building
@@ -61,10 +58,7 @@ The build system automatically detects the architecture (x86_64 or aarch64) and 
 
 # Localization mode (use existing map)
 ./sample_dw_fastlio_slam \
-    --lidar-protocol=lidar.virtual \
-    --lidar-params="file=/data/lidar.bin" \
-    --imu-protocol=imu.virtual \
-    --imu-params="file=/data/imu.bin" \
+    --rig = <path to rig.json>\
     --map-file=/data/slam_map.pcd
 ```
 
@@ -76,39 +70,21 @@ During runtime, the following keyboard controls are available:
 - **S** - Save current map to file (timestamped `.pcd` file)
 - **L** - Load map from file (requires `--map-file` argument)
 
-## Configuration
-
-### SLAM Parameters
-
-The SLAM system can be configured through the `DWFastLIOConfig` structure:
-
-- **Extrinsics**: LiDAR-to-IMU transformation matrix
-- **Filter Parameters**: Point cloud filtering and processing settings
-- **Mapping Parameters**: Keyframe selection thresholds
-- **Optimization**: Graph optimization solver settings
-
-### Sensor Calibration
-
-Proper sensor calibration is critical for accurate SLAM performance:
-- **LiDAR-IMU Extrinsics**: Must be calibrated and provided via `--lidar-imu-extrinsics`
-- **IMU Intrinsics**: Configured through DriveWorks sensor parameters
-- **GPS/RTK**: Optional but recommended for global consistency
-
 
 ## Current Status
 
-### ✅ Completed
+###  Completed
 - DriveWorks application compilation with Fast-LIO as dependency
 - Data type conversion layer between Fast-LIO library and DriveWorks datatypes
 - Mutex locks to prevent deadlocks and data overwriting
 - Run sensors using sensor manager and rig file 
 
-### 🔄 In Progress
+### In Progress
 - test on moving car
 - Solve dependencies for boost, pcl and g2o for orin. [ couldnt install then using sudo apt ]
 - Implement map saving and loading feature.
 
-### ⚠️ Known Issues
+### Known Issues
 - **CPU-Only Processing**: Currently runs on CPU only. GPU acceleration is planned for future work.
 
 ## Future Work
