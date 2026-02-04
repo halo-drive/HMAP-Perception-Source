@@ -74,14 +74,18 @@ link_directories(${G2O_LIBRARY_DIRS})
 # Source files
 #----------------------------------------------------------------------------------------
 
+set(SCANCONTEXT_DIR /usr/local/lidar-slam-detection/slam/common/Scancontext)
 set(SOURCES
     src/main.cpp
     src/DWFastLIO.cpp
+    src/GlobalReloc.cpp
+    ${SCANCONTEXT_DIR}/Scancontext.cpp
 )
 
 set(HEADERS
     include/DWFastLIO.hpp
     include/TypeConverters.hpp
+    include/GlobalReloc.hpp
 )
 
 #----------------------------------------------------------------------------------------
@@ -100,6 +104,7 @@ target_include_directories(${PROJECT_NAME}
         /usr/local/lidar-slam-detection/slam/mapping/fastlio/include
         /usr/local/lidar-slam-detection/slam/common
         /usr/local/lidar-slam-detection/slam/thirdparty
+        ${SCANCONTEXT_DIR}
 )
 
 #----------------------------------------------------------------------------------------
@@ -116,6 +121,8 @@ target_link_libraries(${PROJECT_NAME}
         pcl_common
         pcl_io
         pcl_filters
+        pcl_search
+        pcl_registration
         
         # G2O
         ${G2O_CORE_LIBRARY}

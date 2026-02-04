@@ -28,6 +28,7 @@
 #include <Eigen/Dense>
 
 #include "TypeConverters.hpp"
+#include "GlobalReloc.hpp"
 
 namespace dw_slam {
 
@@ -133,6 +134,23 @@ public:
      */
     void setMappingMode(bool mapping);
 
+    /**
+     * @brief Try global re-localization from current scan. Returns true if pose was found.
+     * Only valid when a keyframe map is loaded (not single PCD).
+     */
+    bool tryGlobalRelocalization(const pcl::PointCloud<pcl::PointXYZI>::Ptr& scan, Eigen::Matrix4d& pose_out);
+
+    /**
+     * @brief True if loaded map is keyframe-based (enables global reloc).
+     */
+    bool hasKeyframeMap() const { return global_reloc_ != nullptr && global_reloc_->keyframeCount() > 0; }
+
+    /** Request global re-localization on next LiDAR scan (e.g. from 'R' key). */
+    void requestRelocalization() { request_reloc_ = true; }
+
+    /** True if we have keyframes to save (mapping mode). */
+    bool hasKeyframesToSave() const { return !keyframes_.empty(); }
+
 private:
     // Fast-LIO integration
     void processScan();
@@ -168,10 +186,19 @@ private:
     
     // Map (protected by mutex for thread safety)
     pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud_;
-    
+
+    // Keyframes for global re-localization (mapping mode: collected; localization: loaded from map dir)
+    std::vector<KeyframeReloc> keyframes_;
+    Eigen::Matrix4d last_keyframe_pose_;
+    bool keyframes_dirty_;  // true after adding keyframes, used when saving
+
+    // Global re-localization (only set when loading a keyframe map directory)
+    std::unique_ptr<GlobalReloc> global_reloc_;
+    bool request_reloc_;
+
     // First LiDAR timestamp (same unit as header.stamp) so we pass relative time to LSD
     uint64_t first_lidar_stamp_us_;
-    
+
     // Processing threads
     std::unique_ptr<std::thread> processing_thread_;
     bool thread_running_;

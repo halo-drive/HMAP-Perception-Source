@@ -13,6 +13,8 @@
 #include <string>
 #include <chrono>
 
+#include <thread>
+
 // DriveWorks
 #include <dw/core/base/Version.h>
 #include <dw/core/base/Status.h>
@@ -381,10 +383,10 @@ public:
         renderParams.defaultTile.backgroundColor = {0.0f, 0.0f, 0.1f, 1.0f};
         CHECK_DW_ERROR(dwRenderEngine_initialize(&m_renderEngine, &renderParams, m_visualizationContext));
         
-        // Create buffers
-        CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_mapBuffer, 
+        // Create buffers (map uses 4 floats per point for x,y,z,intensity for colored-by-intensity rendering)
+        CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_mapBuffer,
                                                    DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-                                                   sizeof(dwVector3f), 0, 10000000, // 10M points
+                                                   4 * sizeof(float32_t), 0, 10000000, // 10M points
                                                    m_renderEngine));
                                                    
         CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_currentScanBuffer,
@@ -552,8 +554,8 @@ public:
     }
     
     void onRender() override {
-        if (!m_renderEngine || !m_slam) {
-            return; // Not initialized yet
+        if (!m_renderEngine || !m_slam || m_mapBuffer == 0) {
+            return; // Not initialized or already released
         }
         
         dwRenderEngine_reset(m_renderEngine);
@@ -575,33 +577,35 @@ public:
                          && std::fabs(pose(1,3)) < kMaxReasonablePos
                          && std::fabs(pose(2,3)) < kMaxReasonablePos;
         
-        // Render map - only render subset of points for performance (max 50K points)
+        // Render map - colored by intensity (like Fast-LIO repo: yellow/green/white gradient)
+        struct PointXYZI { float32_t x, y, z, intensity; };
         auto mapCloud = m_slam->getMapCloud();
         if (mapCloud && !mapCloud->empty()) {
             const size_t MAX_RENDER_POINTS = 50000; // Limit render points for performance
             const size_t step = std::max(size_t(1), mapCloud->size() / MAX_RENDER_POINTS);
             
-            std::vector<dwVector3f> mapPoints;
+            std::vector<PointXYZI> mapPoints;
             mapPoints.reserve(std::min(mapCloud->size() / step, MAX_RENDER_POINTS));
             
             for (size_t i = 0; i < mapCloud->size(); i += step) {
                 if (mapPoints.size() >= MAX_RENDER_POINTS) break;
                 const auto& pt = mapCloud->points[i];
-                mapPoints.push_back({pt.x, pt.y, pt.z});
+                mapPoints.push_back({pt.x, pt.y, pt.z, pt.intensity});
             }
             
             if (!mapPoints.empty()) {
                 dwRenderEngine_setBuffer(m_mapBuffer,
                                         DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
                                         mapPoints.data(),
-                                        sizeof(dwVector3f), 0,
+                                        4 * sizeof(float32_t), 0,
                                         mapPoints.size(),
                                         m_renderEngine);
-                
-                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_WHITE, m_renderEngine);
+                dwRenderEngine_setColorByValue(DW_RENDER_ENGINE_COLOR_BY_VALUE_MODE_INTENSITY, 1.0f, m_renderEngine);
                 dwRenderEngine_renderBuffer(m_mapBuffer, mapPoints.size(), m_renderEngine);
             }
         }
+        // Reset to solid color so next buffers (3 components) don't trigger "color dimension too small"
+        dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_renderEngine);
         
         // Render current scan - limit to reasonable size
         if (m_pointCloudSize > 0) {
@@ -622,17 +626,17 @@ public:
             }
             
             if (!scanPoints.empty()) {
+                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_renderEngine);
                 dwRenderEngine_setBuffer(m_currentScanBuffer,
                                         DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
                                         scanPoints.data(),
                                         sizeof(dwVector3f), 0,
                                         scanPoints.size(),
                                         m_renderEngine);
-                
-                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_RED, m_renderEngine);
                 dwRenderEngine_renderBuffer(m_currentScanBuffer, scanPoints.size(), m_renderEngine);
             }
         }
+        dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
         
         // Render trajectory (green line) - only when pose is valid; otherwise trajectory is huge and draws a single long line
         auto trajectory = m_slam->getTrajectory();
@@ -651,14 +655,13 @@ public:
             }
             
             if (!trajPoints.empty()) {
+                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
                 dwRenderEngine_setBuffer(m_trajectoryBuffer,
                                         DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINESTRIP_3D,
                                         trajPoints.data(),
                                         sizeof(dwVector3f), 0,
                                         trajPoints.size(),
                                         m_renderEngine);
-                
-                dwRenderEngine_setColor(DW_RENDER_ENGINE_COLOR_GREEN, m_renderEngine);
                 dwRenderEngine_renderBuffer(m_trajectoryBuffer, trajPoints.size(), m_renderEngine);
             }
         }
@@ -696,10 +699,11 @@ public:
             m_statusMessage = m_mappingMode ? "Mode: MAPPING" : "Mode: LOCALIZATION";
         }
         else if (key == GLFW_KEY_S) {
-            // Save map
-            std::string filename = "slam_map_" + std::to_string(std::time(nullptr)) + ".pcd";
-            if (m_slam->saveMap(filename)) {
-                m_statusMessage = "Map saved: " + filename;
+            // Save map: keyframe directory if we have keyframes from mapping, else single PCD
+            std::string base = "slam_map_" + std::to_string(std::time(nullptr));
+            std::string path = m_slam->hasKeyframesToSave() ? base : (base + ".pcd");
+            if (m_slam->saveMap(path)) {
+                m_statusMessage = "Map saved: " + path;
             }
         }
         else if (key == GLFW_KEY_L) {
@@ -710,49 +714,75 @@ public:
                 m_statusMessage = "Map loaded: " + filename;
             }
         }
+        else if (key == GLFW_KEY_R) {
+            // Request global re-localization (only when keyframe map is loaded)
+            if (m_slam->hasKeyframeMap()) {
+                m_slam->requestRelocalization();
+                m_statusMessage = "Re-localization requested (next scan)";
+                std::cout << "[dw_fastlio] Re-localization requested. Next LiDAR scan will run ScanContext + GICP." << std::endl;
+            } else {
+                m_statusMessage = "Reloc requires keyframe map (load dir with S or --map-file=dir)";
+                std::cout << "[dw_fastlio] Re-localization requires a keyframe map. Load a map directory (saved with S), not a single .pcd." << std::endl;
+            }
+        }
     }
     
     void onRelease() override {
-        // Release SLAM
-        m_slam.reset();
-        
-        // Release buffers
-        if (m_mapBuffer != 0) {
-            dwRenderEngine_destroyBuffer(m_mapBuffer, m_renderEngine);
-        }
-        if (m_currentScanBuffer != 0) {
-            dwRenderEngine_destroyBuffer(m_currentScanBuffer, m_renderEngine);
-        }
-        if (m_trajectoryBuffer != 0) {
-            dwRenderEngine_destroyBuffer(m_trajectoryBuffer, m_renderEngine);
-        }
-        
-        // Release visualization
-        if (m_renderEngine != DW_NULL_HANDLE) {
-            dwRenderEngine_release(m_renderEngine);
-        }
-        if (m_visualizationContext != DW_NULL_HANDLE) {
-            dwVisualizationRelease(m_visualizationContext);
-        }
-        
-        // Release sensors
-        if (m_lidarSensor != DW_NULL_HANDLE) {
-            dwSAL_releaseSensor(m_lidarSensor);
-        }
-        if (m_imuSensor != DW_NULL_HANDLE) {
-            dwSAL_releaseSensor(m_imuSensor);
-        }
-        if (m_gpsSensor != DW_NULL_HANDLE) {
-            dwSAL_releaseSensor(m_gpsSensor);
-        }
-        
-        // Release sensor manager and rig
+        // 1) Stop sensor manager first so no more events are delivered (avoids feedLiDAR after SLAM is gone).
+        //    When using a rig, sensor handles are owned by the manager - do NOT release them individually.
         if (m_sensorManager != DW_NULL_HANDLE) {
             dwSensorManager_stop(m_sensorManager);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150)); // let plugin threads exit
             dwSensorManager_release(m_sensorManager);
+            m_sensorManager = DW_NULL_HANDLE;
+            m_lidarSensor = DW_NULL_HANDLE;
+            m_imuSensor = DW_NULL_HANDLE;
+            m_gpsSensor = DW_NULL_HANDLE;
+        } else {
+            // Params path: we created sensors with dwSAL_createSensor - release them.
+            if (m_lidarSensor != DW_NULL_HANDLE) {
+                dwSAL_releaseSensor(m_lidarSensor);
+                m_lidarSensor = DW_NULL_HANDLE;
+            }
+            if (m_imuSensor != DW_NULL_HANDLE) {
+                dwSAL_releaseSensor(m_imuSensor);
+                m_imuSensor = DW_NULL_HANDLE;
+            }
+            if (m_gpsSensor != DW_NULL_HANDLE) {
+                dwSAL_releaseSensor(m_gpsSensor);
+                m_gpsSensor = DW_NULL_HANDLE;
+            }
         }
         if (m_rigConfig != DW_NULL_HANDLE) {
             dwRig_release(m_rigConfig);
+            m_rigConfig = DW_NULL_HANDLE;
+        }
+
+        // 2) Release SLAM (stops processing thread in destructor)
+        m_slam.reset();
+        
+        // 3) Release buffers (invalidate handles so late onRender is a no-op)
+        if (m_mapBuffer != 0 && m_renderEngine != DW_NULL_HANDLE) {
+            dwRenderEngine_destroyBuffer(m_mapBuffer, m_renderEngine);
+            m_mapBuffer = 0;
+        }
+        if (m_currentScanBuffer != 0 && m_renderEngine != DW_NULL_HANDLE) {
+            dwRenderEngine_destroyBuffer(m_currentScanBuffer, m_renderEngine);
+            m_currentScanBuffer = 0;
+        }
+        if (m_trajectoryBuffer != 0 && m_renderEngine != DW_NULL_HANDLE) {
+            dwRenderEngine_destroyBuffer(m_trajectoryBuffer, m_renderEngine);
+            m_trajectoryBuffer = 0;
+        }
+        
+        // 4) Release visualization
+        if (m_renderEngine != DW_NULL_HANDLE) {
+            dwRenderEngine_release(m_renderEngine);
+            m_renderEngine = DW_NULL_HANDLE;
+        }
+        if (m_visualizationContext != DW_NULL_HANDLE) {
+            dwVisualizationRelease(m_visualizationContext);
+            m_visualizationContext = DW_NULL_HANDLE;
         }
         
         // Release DriveWorks

@@ -8,10 +8,13 @@
 #include <iomanip>
 #include <chrono>
 #include <thread>
-#include <cstring>   // for strlen()
-#include <cstdio>    // for FILE, fprintf
-#include <cmath>     // for std::isnan, std::isinf
-#include <unistd.h>  // for write(), fsync()
+#include <cstring>
+#include <cstdio>
+#include <cmath>
+#include <cerrno>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/transforms.h>
@@ -35,8 +38,11 @@ DWFastLIO::DWFastLIO()
     , mapping_mode_(true)
     , thread_running_(false)
     , first_lidar_stamp_us_(0)
+    , keyframes_dirty_(false)
+    , request_reloc_(false)
 {
     current_pose_ = Eigen::Matrix4d::Identity();
+    last_keyframe_pose_ = Eigen::Matrix4d::Identity();
     map_cloud_.reset(new pcl::PointCloud<pcl::PointXYZI>());
 }
 
@@ -501,6 +507,17 @@ void DWFastLIO::processScan() {
         std::cout << "[DWFastLIO] [PROCESS] IMU available (" << imu_buffer_size 
                   << " samples), processing scan with " << cloud->size() << " points..." << std::endl;
         
+        // Global re-localization on request (e.g. 'R' key) when keyframe map is loaded
+        if (!mapping_mode_ && request_reloc_ && global_reloc_ && global_reloc_->keyframeCount() > 0) {
+            std::cout << "[DWFastLIO] Trying global relocalization (ScanContext + GICP)..." << std::endl;
+            Eigen::Matrix4d reloc_pose;
+            if (tryGlobalRelocalization(cloud, reloc_pose)) {
+                request_reloc_ = false;
+            } else {
+                std::cout << "[DWFastLIO] Global relocalization failed (no ScanContext match or GICP did not converge)" << std::endl;
+            }
+        }
+        
         // Log when we finally have IMU and can process
         static int first_process = 0;
         if (++first_process <= 10) {
@@ -754,6 +771,16 @@ void DWFastLIO::processScan() {
                                   << " -> " << map_size_after_add << " points" << std::endl;
                     }
                     
+                    // Keyframe for global re-localization: add when pose moved enough (sensor-frame scan)
+                    double dt = (odom_end.block<3,1>(0,3) - last_keyframe_pose_.block<3,1>(0,3)).norm();
+                    Eigen::AngleAxisd aa(last_keyframe_pose_.block<3,3>(0,0).inverse() * odom_end.block<3,3>(0,0));
+                    double da = std::abs(aa.angle());
+                    if (dt >= config_.keyframe_delta_trans || da >= config_.keyframe_delta_angle) {
+                        addKeyframe(odom_end, cloud);
+                        last_keyframe_pose_ = odom_end;
+                        keyframes_dirty_ = true;
+                    }
+                    
                     // Optional: full-map voxel every 100 scans to bound memory (less frequent = less flicker)
                     static int filter_counter = 0;
                     if (++filter_counter % 100 == 0 && map_cloud_->size() > 500000) {
@@ -797,30 +824,146 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr DWFastLIO::getMapCloud() const {
     return map_cloud_;
 }
 
+void DWFastLIO::addKeyframe(const Eigen::Matrix4d& pose, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
+    if (!cloud || cloud->empty()) return;
+    KeyframeReloc kf;
+    kf.pose = pose;
+    kf.cloud.reset(new pcl::PointCloud<pcl::PointXYZI>());
+    pcl::copyPointCloud(*cloud, *kf.cloud);
+    keyframes_.push_back(std::move(kf));
+    if (keyframes_.size() <= 3 || keyframes_.size() % 20 == 0) {
+        std::cout << "[DWFastLIO] Keyframe #" << keyframes_.size() << " (pose [" << pose(0,3) << "," << pose(1,3) << "," << pose(2,3) << "])" << std::endl;
+    }
+}
+
+static bool isDirectoryPath(const std::string& path) {
+    if (path.empty()) return false;
+    if (path.back() == '/') return true;
+    return path.find('.') == std::string::npos || path.find('/') != std::string::npos;
+}
+
 bool DWFastLIO::saveMap(const std::string& filepath) {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    if (isDirectoryPath(filepath) && !keyframes_.empty()) {
+        // Save keyframe map (LSD-compatible directory layout)
+        std::string base = filepath;
+        if (base.back() == '/') base.pop_back();
+        std::string graphDir = base + "/graph";
+        if (mkdir(base.c_str(), 0755) != 0 && errno != EEXIST) {
+            std::cerr << "[DWFastLIO] Cannot create dir " << base << std::endl;
+            return false;
+        }
+        if (mkdir(graphDir.c_str(), 0755) != 0 && errno != EEXIST) {
+            std::cerr << "[DWFastLIO] Cannot create dir " << graphDir << std::endl;
+            return false;
+        }
+        std::ofstream info(graphDir + "/map_info.txt");
+        if (info) info << "version 1\n";
+        for (size_t i = 0; i < keyframes_.size(); i++) {
+            std::string kfDir = graphDir + "/" + std::to_string(i);
+            if (mkdir(kfDir.c_str(), 0755) != 0 && errno != EEXIST) continue;
+            pcl::io::savePCDFileBinary(kfDir + "/cloud.pcd", *keyframes_[i].cloud);
+            std::ofstream data(kfDir + "/data");
+            if (data) {
+                data << "stamp 0 0\nestimate\n" << keyframes_[i].pose.format(Eigen::IOFormat(Eigen::FullPrecision, 0, " ", "\n")) << "\nid " << (long)i << "\n";
+            }
+        }
+        std::cout << "[DWFastLIO] Saved keyframe map: " << keyframes_.size() << " keyframes to " << base << std::endl;
+        return true;
+    }
     if (!map_cloud_ || map_cloud_->empty()) {
         std::cerr << "[DWFastLIO] No map to save" << std::endl;
         return false;
     }
-    
     pcl::io::savePCDFileBinary(filepath, *map_cloud_);
     std::cout << "[DWFastLIO] Saved map: " << map_cloud_->size() << " points to " << filepath << std::endl;
     return true;
 }
 
+static std::vector<std::string> getSubdirs(const std::string& dir) {
+    std::vector<std::string> out;
+    DIR* d = opendir(dir.c_str());
+    if (!d) return out;
+    struct dirent* e;
+    while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] == '.') continue;
+        std::string path = dir + "/" + e->d_name;
+        struct stat st;
+        if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+            bool numeric = true;
+            for (char* p = e->d_name; *p; p++) if (!std::isdigit(*p)) { numeric = false; break; }
+            if (numeric) out.push_back(path);
+        }
+    }
+    closedir(d);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 bool DWFastLIO::loadMap(const std::string& filepath) {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    std::string path = filepath;
+    if (path.back() == '/') path.pop_back();
+    std::string graphDir = path + "/graph";
+    std::ifstream info(graphDir + "/map_info.txt");
+    if (info.good()) {
+        keyframes_.clear();
+        auto subdirs = getSubdirs(graphDir);
+        for (const std::string& kfDir : subdirs) {
+            KeyframeReloc kf;
+            kf.pose = Eigen::Matrix4d::Identity();
+            kf.cloud.reset(new pcl::PointCloud<pcl::PointXYZI>());
+            std::ifstream data(kfDir + "/data");
+            if (!data) continue;
+            std::string token;
+            while (data >> token) {
+                if (token == "estimate") {
+                    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) data >> kf.pose(i, j);
+                    break;
+                }
+            }
+            if (pcl::io::loadPCDFile(kfDir + "/cloud.pcd", *kf.cloud) < 0) continue;
+            keyframes_.push_back(std::move(kf));
+        }
+        if (keyframes_.empty()) {
+            std::cerr << "[DWFastLIO] No keyframes loaded from " << path << std::endl;
+            return false;
+        }
+        global_reloc_.reset(new GlobalReloc());
+        global_reloc_->setDownsampleResolution(config_.voxel_size);
+        global_reloc_->setKeyframes(keyframes_);
+        map_cloud_.reset(new pcl::PointCloud<pcl::PointXYZI>());
+        for (const auto& kf : keyframes_) {
+            pcl::PointCloud<pcl::PointXYZI> world;
+            pcl::transformPointCloud(*kf.cloud, world, kf.pose);
+            *map_cloud_ += world;
+        }
+        std::cout << "[DWFastLIO] Loaded keyframe map: " << keyframes_.size() << " keyframes, " << map_cloud_->size() << " points (global reloc enabled)" << std::endl;
+        std::cout << "[DWFastLIO] Press 'R' to trigger global re-localization (place recognition)" << std::endl;
+        mapping_mode_ = false;
+        return true;
+    }
     map_cloud_.reset(new pcl::PointCloud<pcl::PointXYZI>());
-    
-    if (pcl::io::loadPCDFile(filepath, *map_cloud_) == -1) {
-        std::cerr << "[DWFastLIO] Failed to load map from " << filepath << std::endl;
+    global_reloc_.reset();
+    if (pcl::io::loadPCDFile(path, *map_cloud_) == -1) {
+        std::cerr << "[DWFastLIO] Failed to load map from " << path << std::endl;
         return false;
     }
-    
-    std::cout << "[DWFastLIO] Loaded map: " << map_cloud_->size() << " points from " << filepath << std::endl;
-    mapping_mode_ = false; // Switch to localization mode
+    std::cout << "[DWFastLIO] Loaded map: " << map_cloud_->size() << " points from " << path << std::endl;
+    mapping_mode_ = false;
     return true;
+}
+
+bool DWFastLIO::tryGlobalRelocalization(const pcl::PointCloud<pcl::PointXYZI>::Ptr& scan, Eigen::Matrix4d& pose_out) {
+    if (!global_reloc_ || global_reloc_->keyframeCount() == 0) return false;
+    bool ok = global_reloc_->relocalize(scan, pose_out);
+    if (ok) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        current_pose_ = pose_out;
+        std::cout << "[DWFastLIO] Global relocalization SUCCESS - pose (x,y,z): "
+                  << pose_out(0, 3) << ", " << pose_out(1, 3) << ", " << pose_out(2, 3) << std::endl;
+    }
+    return ok;
 }
 
 void DWFastLIO::setMappingMode(bool mapping) {
