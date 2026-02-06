@@ -70,6 +70,11 @@ find_package(G2O REQUIRED)
 include_directories(SYSTEM ${G2O_INCLUDE_DIR})
 link_directories(${G2O_LIBRARY_DIRS})
 
+# Graph backend = optimization + loop closure (g2o). OpenCV is required only so LSD's
+# mapping_types.h compiles (it has cv::Mat in the frame type); we don't use OpenCV algorithms.
+find_package(OpenCV REQUIRED)
+message(STATUS "Graph backend (optimization + loop closure) enabled")
+
 #----------------------------------------------------------------------------------------
 # Source files
 #----------------------------------------------------------------------------------------
@@ -103,9 +108,16 @@ target_include_directories(${PROJECT_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         /usr/local/lidar-slam-detection/slam/mapping/fastlio/include
         /usr/local/lidar-slam-detection/slam/common
+        /usr/local/lidar-slam-detection/slam/backend
         /usr/local/lidar-slam-detection/slam/thirdparty
+        /usr/local/lidar-slam-detection/third_party/readerwriterqueue
+        /usr/local/lidar-slam-detection/sensor_driver/common_lib/cpp_utils
+        /usr/local/lidar-slam-detection/sensor_driver/common_lib/logging
         ${SCANCONTEXT_DIR}
+        ${OpenCV_INCLUDE_DIRS}
 )
+# Graph backend = optimization + loop closure (always on)
+target_compile_definitions(${PROJECT_NAME} PRIVATE DW_FASTLIO_USE_GRAPH_BACKEND=1)
 
 #----------------------------------------------------------------------------------------
 # Link libraries
@@ -155,12 +167,15 @@ else()
     )
 endif()
 
-# Add Boost and system libraries
+# Add Boost, OpenCV, and system libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
     # Boost (required, so always link)
     Boost::system
     Boost::filesystem
-    
+
+    # OpenCV (required for LSD mapping_types.h cv::Mat; provides cv::fastFree etc. at link time)
+    ${OpenCV_LIBS}
+
     # System
     pthread
 )

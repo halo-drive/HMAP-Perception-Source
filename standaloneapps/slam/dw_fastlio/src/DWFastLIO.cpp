@@ -2,6 +2,14 @@
 // DriveWorks Fast-LIO Implementation
 /////////////////////////////////////////////////////////////////////////////////////////
 
+// Include LSD types first when using graph backend, so mapping_types.h defines
+// ImuType, RTKType, PointCloudAttr, PointAttr once. TypeConverters.hpp then
+// does not redefine them (it only defines when graph backend is off).
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+#include "slam_base.h"
+#include "backend_api.h"
+#endif
+
 #include "../include/DWFastLIO.hpp"
 #include <iostream>
 #include <fstream>
@@ -20,11 +28,10 @@
 #include <pcl/common/transforms.h>
 
 // FastLIO API from LSD (C++ linkage)
-// Matching actual signatures from libfast_lio.so
-extern int  fastlio_init(std::vector<double> &extT, std::vector<double>& extR, 
+extern int  fastlio_init(std::vector<double> &extT, std::vector<double>& extR,
                          int filter_num, int max_point_num, double scan_period, bool undistort);
 extern bool fastlio_is_init();
-extern void fastlio_imu_enqueue(::ImuType imu);  // Global scope ImuType
+extern void fastlio_imu_enqueue(::ImuType imu);
 extern void fastlio_ins_enqueue(bool rtk_valid, ::RTKType ins);
 extern void fastlio_pcl_enqueue(std::shared_ptr<::PointCloudAttr>& points);
 extern bool fastlio_main();
@@ -37,20 +44,38 @@ DWFastLIO::DWFastLIO()
     : initialized_(false)
     , mapping_mode_(true)
     , thread_running_(false)
+    , graph_thread_running_(false)
+    , backend_initialized_(false)
+    , graph_origin_set_(false)
     , first_lidar_stamp_us_(0)
     , keyframes_dirty_(false)
     , request_reloc_(false)
 {
     current_pose_ = Eigen::Matrix4d::Identity();
+    odom_pose_    = Eigen::Matrix4d::Identity();
+    pose_offset_  = Eigen::Matrix4d::Identity();
     last_keyframe_pose_ = Eigen::Matrix4d::Identity();
     map_cloud_.reset(new pcl::PointCloud<pcl::PointXYZI>());
 }
 
 DWFastLIO::~DWFastLIO() {
     thread_running_ = false;
+    graph_thread_running_ = false;
+    if (graph_thread_ && graph_thread_->joinable()) {
+        graph_thread_->join();
+    }
+    if (backend_init_thread_ && backend_init_thread_->joinable()) {
+        backend_init_thread_->join();
+    }
     if (processing_thread_ && processing_thread_->joinable()) {
         processing_thread_->join();
     }
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+    if (backend_initialized_) {
+        deinit_backend();
+        backend_initialized_ = false;
+    }
+#endif
 }
 
 bool DWFastLIO::initialize(const DWFastLIOConfig& config) {
@@ -80,23 +105,70 @@ bool DWFastLIO::initialize(const DWFastLIOConfig& config) {
         return false;
     }
     
-    // Verify initialization
+    // fastlio_is_init() becomes true only after the first IMU+LiDAR frame is processed (EKF init). Expected to be false here.
     bool is_init = fastlio_is_init();
-    std::cout << "[DWFastLIO] fastlio_is_init() returned: " << (is_init ? "true" : "false") << std::flush << std::endl;
-    
-    if (!is_init) {
-        std::cerr << "[DWFastLIO] WARNING: fastlio_init() succeeded but fastlio_is_init() returns false!" << std::endl;
-        // Continue anyway - might be a timing issue
-    }
+    std::cout << "[DWFastLIO] fastlio_is_init() = " << (is_init ? "true" : "false")
+              << " (will become true after first scan is processed)" << std::endl;
     
     initialized_ = true;
-    
+
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+    // Defer graph backend init to a background thread so we don't block the main thread.
+    // That lets the app start draining sensor events immediately and avoids "queues full, losing packets"
+    // while init_backend (and its solver allocation / logging) runs.
+    if (mapping_mode_) {
+        backend_init_thread_.reset(new std::thread(&DWFastLIO::initBackendInBackground, this));
+        std::cout << "[DWFastLIO] Graph backend init deferred to background (main loop can drain sensors now)" << std::endl;
+    }
+#endif
+
     // Start processing thread
     thread_running_ = true;
     processing_thread_.reset(new std::thread(&DWFastLIO::processScan, this));
-    
+
     std::cout << "[DWFastLIO] Initialized successfully" << std::endl;
     return true;
+}
+
+void DWFastLIO::initBackendInBackground() {
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+    InitParameter backend_param;
+    backend_param.map_path = "";
+    backend_param.resolution = config_.voxel_size;
+    backend_param.key_frame_distance = config_.keyframe_delta_trans;
+    backend_param.key_frame_degree = config_.keyframe_delta_angle * 180.0 / M_PI;
+    backend_param.key_frame_range = 10.0;
+    backend_param.scan_period = config_.scan_period;
+    try {
+        init_backend(backend_param);
+        backend_initialized_ = true;
+        graph_thread_running_ = true;
+        graph_thread_.reset(new std::thread(&DWFastLIO::runGraphThread, this));
+        std::cout << "[DWFastLIO] Graph backend initialized in background (get_odom2map, floor, GPS)" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[DWFastLIO] init_backend failed: " << e.what() << " (continuing without graph)" << std::endl;
+    }
+#else
+    (void)0;
+#endif
+}
+
+void DWFastLIO::runGraphThread() {
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+    std::cout << "[DWFastLIO] Graph thread started" << std::endl;
+    while (graph_thread_running_) {
+        graph_optimization(graph_thread_running_);
+        int sleep_ms = 100;
+        int count = 0;
+        while (count < 30 && graph_thread_running_) {  // ~3s total
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            count++;
+        }
+    }
+    std::cout << "[DWFastLIO] Graph thread stopped" << std::endl;
+#else
+    (void)0;
+#endif
 }
 
 void DWFastLIO::feedIMU(const dwIMUFrame& dwImu, dwTime_t timestamp) {
@@ -153,10 +225,23 @@ void DWFastLIO::feedGPS(const dwGPSFrame& gpsFrame, const dwIMUFrame& imuFrame, 
     if (first_lidar_stamp_us_ == 0) first_lidar_stamp_us_ = stamp_us;
     lsdRTK.timestamp = stamp_us - first_lidar_stamp_us_;
     
-    // Feed into Fast-LIO backend (INS/RTK for velocity constraint and graph; LSD uses meas.ins when wheelspeed_en or GNSS observation is used)
+    // Feed into Fast-LIO backend (INS/RTK for velocity constraint and graph)
     bool rtk_valid = (lsdRTK.status != 0);
     fastlio_ins_enqueue(rtk_valid, lsdRTK);
-    
+
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+    // Full pipeline: feed graph backend with GPS; set origin on first valid fix
+    if (backend_initialized_) {
+        std::shared_ptr<::RTKType> rtk_ptr = std::make_shared<::RTKType>(lsdRTK);
+        enqueue_graph_gps(rtk_valid, rtk_ptr);
+        if (rtk_valid && !graph_origin_set_) {
+            graph_set_origin(lsdRTK);
+            graph_origin_set_ = true;
+            std::cout << "[DWFastLIO] Graph origin set from first valid GPS" << std::endl;
+        }
+    }
+#endif
+
     static int gps_fed_count = 0;
     gps_fed_count++;
     if (gps_fed_count <= 5) {
@@ -699,26 +784,60 @@ void DWFastLIO::processScan() {
         
         if (success) {
             std::cout << "[DWFastLIO] [PROCESS] fastlio_main() succeeded, getting odometry..." << std::flush << std::endl;
-            // Get odometry
+            // Get odometry (Fast-LIO "odom" frame)
             Eigen::Matrix4d odom_start = Eigen::Matrix4d::Identity();
-            Eigen::Matrix4d odom_end = Eigen::Matrix4d::Identity();
+            Eigen::Matrix4d odom_end   = Eigen::Matrix4d::Identity();
             fastlio_odometry(odom_start, odom_end);
-            
-            if (processed_count <= 5) {
-                std::cout << "[DWFastLIO] [PROCESS] Odometry: pose translation = [" 
-                          << odom_end(0,3) << ", " << odom_end(1,3) << ", " << odom_end(2,3) << "]" << std::endl;
+
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+            // Full pipeline: feed graph backend (frame + floor) and get pose from get_odom2map()
+            if (backend_initialized_) {
+                // Build frame like LSD Fast-LIO getPose: points->T = delta odom, frame.T = odom at scan start
+                cloudAttr->T = (Eigen::Isometry3d(odom_start).inverse() * Eigen::Isometry3d(odom_end)).matrix();
+                ::PointCloudAttrImagePose frame(cloudAttr, Eigen::Isometry3d(odom_start));
+                ::PointCloudAttrImagePose keyframe;
+                enqueue_graph(frame, keyframe);
+
+                // Floor constraint: same scan -> filter -> floor -> graph
+                try {
+                    PointCloud::Ptr cloud_ptr = cloud;
+                    PointCloud::Ptr filtered = enqueue_filter(cloud_ptr);
+                    if (filtered && !filtered->empty()) {
+                        FloorCoeffs floor_coeffs = enqueue_floor(filtered);
+                        enqueue_graph_floor(floor_coeffs);
+                    }
+                } catch (const std::exception& e) {
+                    (void)e;
+                }
             }
-            
-            // Update current pose (with mutex protection)
+#endif
+
+            // World/map pose: from graph when backend active, else pose_offset_ * odom
+            Eigen::Matrix4d world_pose;
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
-                current_pose_ = odom_end;
+                odom_pose_ = odom_end;
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+                if (backend_initialized_) {
+                    Eigen::Isometry3d odom2map = get_odom2map();
+                    world_pose = (odom2map * Eigen::Isometry3d(odom_pose_)).matrix();
+                } else
+#endif
+                {
+                    world_pose = pose_offset_ * odom_pose_;
+                }
+                current_pose_ = world_pose;
                 trajectory_.push_back(current_pose_);
-                
+
                 // Limit trajectory size to prevent memory growth
                 if (trajectory_.size() > 5000) { // Reduced from 10000
                     trajectory_.erase(trajectory_.begin(), trajectory_.begin() + 2500);
                 }
+            }
+
+            if (processed_count <= 5) {
+                std::cout << "[DWFastLIO] [PROCESS] Odometry: pose translation = [" 
+                          << world_pose(0,3) << ", " << world_pose(1,3) << ", " << world_pose(2,3) << "]" << std::endl;
             }
             
             static int pose_log_counter = 0;
@@ -732,7 +851,7 @@ void DWFastLIO::processScan() {
                 }
                 std::cout << "[DWFastLIO] Pose updated #" << pose_log_counter 
                           << " - Position: " << std::fixed << std::setprecision(2)
-                          << odom_end(0,3) << ", " << odom_end(1,3) << ", " << odom_end(2,3) 
+                          << world_pose(0,3) << ", " << world_pose(1,3) << ", " << world_pose(2,3) 
                           << " (map points: " << map_size << ")" << std::endl;
             }
                       
@@ -743,7 +862,7 @@ void DWFastLIO::processScan() {
                 }
                 // Transform cloud to world frame
                 pcl::PointCloud<pcl::PointXYZI>::Ptr transformed(new pcl::PointCloud<pcl::PointXYZI>());
-                pcl::transformPointCloud(*cloud, *transformed, odom_end);
+                pcl::transformPointCloud(*cloud, *transformed, world_pose);
                 
                 // Voxel-downsample the new scan before adding (avoids unbounded growth and prevents
                 // "vanishing" from full-map voxel replace every N scans)
@@ -772,12 +891,12 @@ void DWFastLIO::processScan() {
                     }
                     
                     // Keyframe for global re-localization: add when pose moved enough (sensor-frame scan)
-                    double dt = (odom_end.block<3,1>(0,3) - last_keyframe_pose_.block<3,1>(0,3)).norm();
-                    Eigen::AngleAxisd aa(last_keyframe_pose_.block<3,3>(0,0).inverse() * odom_end.block<3,3>(0,0));
+                    double dt = (world_pose.block<3,1>(0,3) - last_keyframe_pose_.block<3,1>(0,3)).norm();
+                    Eigen::AngleAxisd aa(last_keyframe_pose_.block<3,3>(0,0).inverse() * world_pose.block<3,3>(0,0));
                     double da = std::abs(aa.angle());
                     if (dt >= config_.keyframe_delta_trans || da >= config_.keyframe_delta_angle) {
-                        addKeyframe(odom_end, cloud);
-                        last_keyframe_pose_ = odom_end;
+                        addKeyframe(world_pose, cloud);
+                        last_keyframe_pose_ = world_pose;
                         keyframes_dirty_ = true;
                     }
                     
@@ -877,6 +996,9 @@ bool DWFastLIO::saveMap(const std::string& filepath) {
     }
     pcl::io::savePCDFileBinary(filepath, *map_cloud_);
     std::cout << "[DWFastLIO] Saved map: " << map_cloud_->size() << " points to " << filepath << std::endl;
+    if (keyframes_.empty()) {
+        std::cout << "[DWFastLIO] No keyframes (pose did not move >= 0.25 m). Load this .pcd for map display only; press R after driving and saving a keyframe map for relocalization." << std::endl;
+    }
     return true;
 }
 
@@ -959,7 +1081,17 @@ bool DWFastLIO::tryGlobalRelocalization(const pcl::PointCloud<pcl::PointXYZI>::P
     bool ok = global_reloc_->relocalize(scan, pose_out);
     if (ok) {
         std::lock_guard<std::mutex> lock(state_mutex_);
+        // Update map<-odom offset so future odometry lives in relocalized map frame.
+        // We want: pose_offset_ * odom_pose_ = pose_out  =>  pose_offset_ = pose_out * odom_pose_.inverse()
+        Eigen::Matrix4d odom = odom_pose_;
+        if (odom.isIdentity(1e-9)) {
+            // If odom is still identity (very early), just set offset = pose_out.
+            pose_offset_ = pose_out;
+        } else {
+            pose_offset_ = pose_out * odom.inverse();
+        }
         current_pose_ = pose_out;
+        trajectory_.push_back(current_pose_);
         std::cout << "[DWFastLIO] Global relocalization SUCCESS - pose (x,y,z): "
                   << pose_out(0, 3) << ", " << pose_out(1, 3) << ", " << pose_out(2, 3) << std::endl;
     }

@@ -181,7 +181,9 @@ private:
     
     // State (protected by mutex for thread safety)
     mutable std::mutex state_mutex_;
-    Eigen::Matrix4d current_pose_;
+    Eigen::Matrix4d current_pose_;   // pose in map/world frame
+    Eigen::Matrix4d odom_pose_;      // raw Fast-LIO odometry pose
+    Eigen::Matrix4d pose_offset_;    // map<-odom transform (applied to odom_pose_)
     std::vector<Eigen::Matrix4d> trajectory_;
     
     // Map (protected by mutex for thread safety)
@@ -201,7 +203,16 @@ private:
 
     // Processing threads
     std::unique_ptr<std::thread> processing_thread_;
+    std::unique_ptr<std::thread> graph_thread_;
+    std::unique_ptr<std::thread> backend_init_thread_;  // defer init_backend so main thread can drain sensors sooner
     bool thread_running_;
+    bool graph_thread_running_;
+
+    // Graph backend (LSD full pipeline): when true, use get_odom2map() for pose and feed frames/floor/GPS
+    bool backend_initialized_;
+    bool graph_origin_set_;  // true after first valid GPS passed to graph_set_origin
+    void runGraphThread();
+    void initBackendInBackground();
 };
 
 } // namespace dw_slam

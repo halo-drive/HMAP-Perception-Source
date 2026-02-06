@@ -22,8 +22,11 @@
 #include <Eigen/Geometry>
 #include <Eigen/Dense>
 
-// ===== LSD Type Definitions (Global scope - NO OpenCV) =====
-
+// ===== LSD-compatible types (global scope) =====
+// When DW_FASTLIO_USE_GRAPH_BACKEND is set, these are defined by mapping_types.h
+// (included via slam_base.h before this header). Otherwise we define them here so
+// we can build without the full LSD stack and still convert DriveWorks <-> Fast-LIO.
+#ifndef DW_FASTLIO_USE_GRAPH_BACKEND
 struct ImuType {
     double stamp;
     Eigen::Vector3d acc;
@@ -57,6 +60,7 @@ struct PointCloudAttr {
     std::vector<PointAttr> attr;
     Eigen::Matrix4d T;
 };
+#endif
 
 namespace dw_slam {
 
