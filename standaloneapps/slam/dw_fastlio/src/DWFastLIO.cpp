@@ -8,6 +8,8 @@
 #ifdef DW_FASTLIO_USE_GRAPH_BACKEND
 #include "slam_base.h"
 #include "backend_api.h"
+#include <g2o/core/optimization_algorithm_factory.h>
+#include <g2o/core/optimization_algorithm_property.h>
 #endif
 
 #include "../include/DWFastLIO.hpp"
@@ -132,6 +134,34 @@ bool DWFastLIO::initialize(const DWFastLIOConfig& config) {
 
 void DWFastLIO::initBackendInBackground() {
 #ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+    // LSD backend requests solver "lm_var"; our g2o build registers "lm_var_cholmod". Register alias.
+    {
+        g2o::OptimizationAlgorithmFactory* factory = g2o::OptimizationAlgorithmFactory::instance();
+        std::shared_ptr<g2o::AbstractOptimizationAlgorithmCreator> cholmod_creator;
+        for (const auto& c : factory->creatorList()) {
+            if (c->property().name == "lm_var_cholmod") {
+                cholmod_creator = c;
+                break;
+            }
+        }
+        if (cholmod_creator) {
+            class LmVarAliasCreator : public g2o::AbstractOptimizationAlgorithmCreator {
+                std::shared_ptr<g2o::AbstractOptimizationAlgorithmCreator> delegate_;
+            public:
+                explicit LmVarAliasCreator(const std::shared_ptr<g2o::AbstractOptimizationAlgorithmCreator>& d)
+                    : AbstractOptimizationAlgorithmCreator(g2o::OptimizationAlgorithmProperty(
+                            "lm_var", "Levenberg: Cholesky (variable blocksize)", "CHOLMOD",
+                            false, -1, -1)),
+                      delegate_(d) {}
+                g2o::OptimizationAlgorithm* construct() override { return delegate_->construct(); }
+            };
+            factory->registerSolver(std::make_shared<LmVarAliasCreator>(cholmod_creator));
+            std::cout << "[DWFastLIO] Registered g2o solver alias: lm_var -> lm_var_cholmod" << std::endl;
+        } else {
+            std::cerr << "[DWFastLIO] lm_var_cholmod not found in g2o factory; graph solver may fail" << std::endl;
+        }
+    }
+
     InitParameter backend_param;
     backend_param.map_path = "";
     backend_param.resolution = config_.voxel_size;
