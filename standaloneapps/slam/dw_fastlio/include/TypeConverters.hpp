@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <algorithm>
 
@@ -151,12 +152,32 @@ inline void dwIMUToLSD(const dwIMUFrame& dwImu, ::ImuType& lsdImu, dwTime_t time
     }
     lsdImu.stamp = stamp_sec;
     
-    // Acceleration (m/s²)
-    lsdImu.acc = Eigen::Vector3d(dwImu.acceleration[0], 
-                                  dwImu.acceleration[1], 
+    // Acceleration: DriveWorks dwIMUFrame.acceleration is in m/s² (IMUTypes.h VS-90050).
+    // Fast-LIO IMU_Processing expects norm ≈ 1.0 (gravity in g). Without this, "IMU init is not stable, reset"
+    // fires every frame → EKF never stabilizes → vertical (Z) pose jitter and drift.
+    lsdImu.acc = Eigen::Vector3d(dwImu.acceleration[0],
+                                  dwImu.acceleration[1],
                                   dwImu.acceleration[2]);
+    const double acc_norm = lsdImu.acc.norm();
+    if (acc_norm > 5.0 && acc_norm < 15.0)
+        lsdImu.acc /= 9.80665;  // m/s² -> g (DriveWorks spec)
+    else if (acc_norm > 0.3 && acc_norm < 2.0)
+        lsdImu.acc /= acc_norm; // already in g but wrong scale (e.g. 0.56) → unit vector so init check passes
+    const bool converted_to_g = (acc_norm > 5.0 && acc_norm < 15.0);
+    // Log first few frames to verify units (DriveWorks: m/s², rad/s per IMUTypes.h)
+    {
+        static int log_count = 0;
+        if (log_count < 5) {
+            std::cout << "[DWFastLIO] IMU raw (DriveWorks): acc=[" << dwImu.acceleration[0] << ", "
+                      << dwImu.acceleration[1] << ", " << dwImu.acceleration[2] << "] m/s², norm=" << acc_norm
+                      << " | turnrate=[" << dwImu.turnrate[0] << ", " << dwImu.turnrate[1] << ", "
+                      << dwImu.turnrate[2] << "] rad/s | converted_to_g=" << (converted_to_g ? 1 : 0)
+                      << " -> acc_norm_for_fastlio=" << lsdImu.acc.norm() << std::endl;
+            log_count++;
+        }
+    }
     
-    // Gyroscope (rad/s)
+    // Gyroscope (rad/s) - IMUTypes.h VS-90040
     lsdImu.gyr = Eigen::Vector3d(dwImu.turnrate[0],
                                   dwImu.turnrate[1],
                                   dwImu.turnrate[2]);
