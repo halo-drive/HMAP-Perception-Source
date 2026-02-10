@@ -1,0 +1,1 @@
+sample_sfm_pomoparser --rig=/usr/local/driveworks/data/halorigs/live/rig_sfm.json

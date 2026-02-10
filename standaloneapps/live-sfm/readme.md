@@ -1,1 +1,1 @@
-application to integrate pomo-parser with nvidia sample_sfm
+application to integrate pomo-parser and live camera with nvidia sample_sfm
