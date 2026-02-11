@@ -14,6 +14,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -303,40 +304,58 @@ private:
 
     //--------------------------------------------------------------------------
     // Resync stream to find valid magic number
+    // Discards bytes one at a time and peeks for valid header.
+    // This ensures magic bytes remain in stream for subsequent readHeader().
     //--------------------------------------------------------------------------
     bool resyncToMagic()
     {
-        uint8_t byte;
-        uint32_t magicBuffer = 0;
-        uint32_t maxAttempts = 1000;
+        std::cout << "[CameraIPCClient:" << m_cameraIndex
+                  << "] Attempting resync..." << std::endl;
+
+        const uint32_t maxAttempts = 1000;
 
         for (uint32_t i = 0; i < maxAttempts; ++i)
         {
-            size_t readSize = 1;
+            // Discard 1 byte
+            uint8_t discard;
+            size_t discardSize = 1;
             dwStatus status = dwSocketConnection_read(
-                &byte,
-                &readSize,
+                &discard,
+                &discardSize,
                 m_receiveTimeoutUs,
                 m_socketConnection);
 
-            if (status != DW_SUCCESS || readSize != 1)
+            if (status != DW_SUCCESS || discardSize != 1)
             {
+                std::cerr << "[CameraIPCClient:" << m_cameraIndex
+                          << "] Resync read failed: " << dwGetStatusName(status)
+                          << std::endl;
                 return false;
             }
 
-            // Shift and add new byte
-            magicBuffer = (magicBuffer << 8) | byte;
+            // Peek for valid header
+            CameraFrameHeader peekHeader{};
+            size_t peekSize = sizeof(CameraFrameHeader);
+            status = dwSocketConnection_peek(
+                reinterpret_cast<uint8_t*>(&peekHeader),
+                &peekSize,
+                1000,  // Short timeout for peek
+                m_socketConnection);
 
-            if (magicBuffer == CAMERA_FRAME_HEADER_MAGIC)
+            if (status == DW_SUCCESS &&
+                peekSize == sizeof(CameraFrameHeader) &&
+                peekHeader.magic == CAMERA_FRAME_HEADER_MAGIC)
             {
                 std::cout << "[CameraIPCClient:" << m_cameraIndex
-                          << "] Resynced after " << i << " bytes" << std::endl;
+                          << "] Resynced after discarding " << (i + 1)
+                          << " bytes" << std::endl;
                 return true;
             }
         }
 
         std::cerr << "[CameraIPCClient:" << m_cameraIndex
-                  << "] Failed to resync" << std::endl;
+                  << "] Failed to resync after " << maxAttempts
+                  << " attempts" << std::endl;
         return false;
     }
 
@@ -498,7 +517,8 @@ private:
     {
         frameData.cameraIndex = header.cameraIndex;
         frameData.frameId = header.frameId;
-        frameData.timestamp = 0;  // TODO: Extract from header if available
+        // Use current system time since server header doesn't include timestamp
+        frameData.timestamp = getCurrentTimestamp();
 
         // Image data
         frameData.width = header.width;
@@ -554,6 +574,17 @@ private:
         frameData.avgStage2Ms = header.avgStage2Ms;
 
         frameData.valid = true;
+    }
+
+    //--------------------------------------------------------------------------
+    // Get current timestamp in microseconds
+    //--------------------------------------------------------------------------
+    static dwTime_t getCurrentTimestamp()
+    {
+        auto now = std::chrono::high_resolution_clock::now();
+        auto duration = now.time_since_epoch();
+        return static_cast<dwTime_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(duration).count());
     }
 
 private:

@@ -7,26 +7,22 @@
 // WARRANTIES OF NONINFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR
 // PURPOSE.
 //
-// FusionEngine - Multi-sensor fusion consumer application
-// Consumes LiDAR detection data (port 40002) and camera DNN data (ports 49252-49255)
-// and performs sensor fusion to produce combined detection outputs.
+// FusionEngine - Multi-Sensor Fusion Pipeline Test
+// Tests receiving and synchronizing camera and LiDAR frames for fusion.
+// Camera server: driveseg_object (ports 49252-49255)
+// LiDAR server: lidar_object_detection_interprocess_communication (port 40002)
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
-
-// CUDA
-#include <cuda_runtime.h>
+#include <vector>
 
 // DriveWorks Core
 #include <dw/core/base/Types.h>
@@ -34,1243 +30,461 @@
 #include <dw/core/context/Context.h>
 #include <dw/core/logger/Logger.h>
 
-// DriveWorks Visualization
-#include <dwvisualization/core/RenderEngine.h>
-#include <dwvisualization/core/Renderer.h>
-#include <dwvisualization/core/Visualization.h>
-
-// DriveWorks Sample Framework
-#include <framework/Checks.hpp>
-#include <framework/DriveWorksSample.hpp>
-#include <framework/Log.hpp>
+// Sample Framework
 #include <framework/ProgramArguments.hpp>
-#include <framework/WindowGLFW.hpp>
-#include <framework/Mat4.hpp>
-#include <framework/MouseView3D.hpp>
 
-// FusionEngine headers
-#include "FusionEngine.hpp"
-#include "FusedPacket.hpp"
+// FusionEngine components
+#include "CameraIPCClient.hpp"
+#include "LidarIPCClient.hpp"
+#include "SensorSynchronizer.hpp"
 
-using namespace dw_samples::common;
 using namespace fusionengine;
 
 //------------------------------------------------------------------------------
-// FusionEngine Application Class
+// Global state for signal handling
 //------------------------------------------------------------------------------
-class FusionEngineApp : public DriveWorksSample
+static std::atomic<bool> g_running{true};
+
+extern "C" void signalHandler(int)
 {
-public:
-    explicit FusionEngineApp(const ProgramArguments& args);
-
-    // DriveWorksSample interface
-    bool onInitialize() override;
-    void onRelease() override;
-    void onProcess() override;
-    void onRender() override;
-    void onKeyDown(int key, int scancode, int mods) override;
-    void onMouseMove(float x, float y) override;
-    void onMouseDown(int button, float x, float y, int mods) override;
-    void onMouseUp(int button, float x, float y, int mods) override;
-    void onMouseWheel(float x, float y) override;
-
-private:
-    // Initialization helpers
-    bool initDriveWorks();
-    bool initVisualization();
-    bool initFusionEngine();
-    bool initRenderBuffers();
-
-    // Rendering helpers
-    void renderLidarPointCloud();
-    void renderDetections();
-    void renderLidarBoundingBoxes();  // Raw LiDAR boxes (when cameras disabled)
-    void renderFreeSpace();
-    void renderGroundPlane();
-    void renderStatusOverlay();
-    void render3DBox(const FusedDetection& det, const float* color);
-
-    // Parse command-line arguments
-    void parseArguments();
-
-private:
-    // DriveWorks context
-    dwContextHandle_t m_context{DW_NULL_HANDLE};
-
-    // Visualization
-    dwVisualizationContextHandle_t m_viz{DW_NULL_HANDLE};
-    dwRenderEngineHandle_t m_renderEngine{DW_NULL_HANDLE};
-    uint32_t m_mainTile{0};
-
-    // Camera view control
-    std::unique_ptr<MouseView3D> m_mouseView;
-
-    // Render buffers
-    uint32_t m_pointCloudBufferId{0};
-    uint32_t m_detectionLineBufferId{0};
-    uint32_t m_freeSpaceBufferId{0};
-    uint32_t m_groundPlaneBufferId{0};
-
-    // Fusion engine
-    std::unique_ptr<FusionEngine> m_fusionEngine;
-    FusionEngineConfig m_fusionConfig;
-
-    // Current fused data
-    FusedPacket m_currentPacket{};
-    std::mutex m_packetMutex;
-    bool m_hasPacket{false};
-
-    // Configuration from arguments
-    std::string m_lidarIP{"127.0.0.1"};
-    uint16_t m_lidarPort{40002};
-    std::string m_cameraIP{"127.0.0.1"};
-    uint16_t m_cameraBasePort{49252};
-    uint32_t m_numCameras{4};
-    bool m_enableLidar{true};
-    bool m_enableCameras{true};
-    bool m_asyncMode{true};
-
-    // Display settings
-    uint32_t m_windowWidth{1920};
-    uint32_t m_windowHeight{1080};
-    float m_pointSize{2.0f};
-
-    // Statistics
-    std::atomic<uint64_t> m_frameCount{0};
-    std::chrono::steady_clock::time_point m_lastStatTime;
-    float m_fps{0.0f};
-};
-
-//------------------------------------------------------------------------------
-// Constructor
-//------------------------------------------------------------------------------
-FusionEngineApp::FusionEngineApp(const ProgramArguments& args)
-    : DriveWorksSample(args)
-    , m_fusionEngine(std::make_unique<FusionEngine>())
-{
-    parseArguments();
+    std::cout << "\n[Main] Shutdown signal received" << std::endl;
+    g_running = false;
 }
 
 //------------------------------------------------------------------------------
-// Parse command-line arguments
+// Camera receive thread function
 //------------------------------------------------------------------------------
-void FusionEngineApp::parseArguments()
+void cameraReceiveThread(CameraIPCClient* client,
+                         SensorSynchronizer* synchronizer,
+                         std::atomic<uint64_t>* frameCount)
 {
-    // Access full ProgramArguments to distinguish defaults vs. user-specified values
-    ProgramArguments& args = getArgs();
+    uint32_t camIndex = client->getCameraIndex();
+    std::cout << "[Thread] Camera " << camIndex << " receive thread started"
+              << std::endl;
 
-    // LiDAR settings
-    // Support both "lidar-ip" and legacy "ip" from lidar visualization sample.
-    // If user explicitly passed --ip, that should override the default lidar-ip.
-    if (args.wasSpecified("ip"))
+    while (g_running)
     {
-        m_lidarIP = args.get("ip");
-    }
-    else
-    {
-        m_lidarIP = args.get("lidar-ip");
-    }
-    if (m_lidarIP.empty())
-    {
-        m_lidarIP = "127.0.0.1";
-    }
-
-    // Support both "lidar-port" and legacy "port" from lidar visualization sample
-    std::string lidarPortStr;
-    if (args.wasSpecified("port"))
-    {
-        lidarPortStr = args.get("port");
-    }
-    else
-    {
-        lidarPortStr = args.get("lidar-port");
-    }
-    if (!lidarPortStr.empty())
-    {
-        m_lidarPort = static_cast<uint16_t>(std::stoul(lidarPortStr));
-    }
-
-    // Camera settings
-    m_cameraIP = getArgument("camera-ip");
-    if (m_cameraIP.empty())
-    {
-        m_cameraIP = "127.0.0.1";
-    }
-
-    std::string cameraPortStr = getArgument("camera-port");
-    if (!cameraPortStr.empty())
-    {
-        m_cameraBasePort = static_cast<uint16_t>(std::stoul(cameraPortStr));
-    }
-
-    std::string numCamerasStr = getArgument("num-cameras");
-    if (!numCamerasStr.empty())
-    {
-        m_numCameras = static_cast<uint32_t>(std::stoul(numCamerasStr));
-    }
-
-    // Enable/disable sensors
-    std::string enableLidarStr = args.get("enable-lidar");
-    if (!enableLidarStr.empty())
-    {
-        m_enableLidar = (enableLidarStr == "1" || enableLidarStr == "true");
-    }
-
-    // Support both "enable-cameras" and legacy "enable-camera".
-    // If user explicitly passed --enable-camera, that should override the default.
-    std::string enableCamerasStr;
-    if (args.wasSpecified("enable-camera"))
-    {
-        enableCamerasStr = args.get("enable-camera");
-    }
-    else
-    {
-        enableCamerasStr = args.get("enable-cameras");
-    }
-    if (!enableCamerasStr.empty())
-    {
-        m_enableCameras = (enableCamerasStr == "1" || enableCamerasStr == "true");
-    }
-
-    // Processing mode
-    std::string asyncStr = getArgument("async");
-    if (!asyncStr.empty())
-    {
-        m_asyncMode = (asyncStr == "1" || asyncStr == "true");
-    }
-
-    // Display settings
-    std::string widthStr = getArgument("width");
-    if (!widthStr.empty())
-    {
-        m_windowWidth = static_cast<uint32_t>(std::stoul(widthStr));
-    }
-
-    std::string heightStr = getArgument("height");
-    if (!heightStr.empty())
-    {
-        m_windowHeight = static_cast<uint32_t>(std::stoul(heightStr));
-    }
-}
-
-//------------------------------------------------------------------------------
-// Initialize
-//------------------------------------------------------------------------------
-bool FusionEngineApp::onInitialize()
-{
-    std::cout << "========================================" << std::endl;
-    std::cout << " FusionEngine - Multi-Sensor Fusion    " << std::endl;
-    std::cout << "========================================" << std::endl;
-
-    if (!initDriveWorks())
-    {
-        std::cerr << "Failed to initialize DriveWorks" << std::endl;
-        return false;
-    }
-
-    if (!initVisualization())
-    {
-        std::cerr << "Failed to initialize visualization" << std::endl;
-        return false;
-    }
-
-    if (!initRenderBuffers())
-    {
-        std::cerr << "Failed to initialize render buffers" << std::endl;
-        return false;
-    }
-
-    if (!initFusionEngine())
-    {
-        std::cerr << "Failed to initialize fusion engine" << std::endl;
-        return false;
-    }
-
-    m_lastStatTime = std::chrono::steady_clock::now();
-
-    std::cout << "Initialization complete" << std::endl;
-    return true;
-}
-
-//------------------------------------------------------------------------------
-// Initialize DriveWorks
-//------------------------------------------------------------------------------
-bool FusionEngineApp::initDriveWorks()
-{
-    std::cout << "Initializing DriveWorks..." << std::endl;
-
-    // Print SDK version
-    dwVersion version{};
-    CHECK_DW_ERROR(dwGetVersion(&version));
-    std::cout << "  DriveWorks SDK version: " << version.major << "."
-              << version.minor << "." << version.patch << std::endl;
-
-    // Create context
-    dwContextParameters contextParams{};
-    CHECK_DW_ERROR(dwInitialize(&m_context, DW_VERSION, &contextParams));
-
-    return true;
-}
-
-//------------------------------------------------------------------------------
-// Initialize Visualization
-//------------------------------------------------------------------------------
-bool FusionEngineApp::initVisualization()
-{
-    std::cout << "Initializing visualization..." << std::endl;
-
-    // Initialize visualization context
-    CHECK_DW_ERROR(dwVisualizationInitialize(&m_viz, m_context));
-
-    // Create render engine
-    dwRenderEngineParams renderParams{};
-    CHECK_DW_ERROR(
-        dwRenderEngine_initDefaultParams(&renderParams, m_windowWidth, m_windowHeight));
-    renderParams.defaultTile.lineWidth = 2.0f;
-    renderParams.defaultTile.font = DW_RENDER_ENGINE_FONT_VERDANA_16;
-    renderParams.bounds.x = 0.0f;
-    renderParams.bounds.y = 0.0f;
-    renderParams.bounds.width = static_cast<float32_t>(m_windowWidth);
-    renderParams.bounds.height = static_cast<float32_t>(m_windowHeight);
-
-    CHECK_DW_ERROR(dwRenderEngine_initialize(&m_renderEngine, &renderParams, m_viz));
-
-    // Use default tile (ID 0) for 3D view
-    m_mainTile = 0;
-
-    // Initialize mouse view for camera control
-    m_mouseView = std::make_unique<MouseView3D>();
-    m_mouseView->setWindowAspect(
-        static_cast<float>(m_windowWidth) / static_cast<float>(m_windowHeight));
-
-    // Set initial camera position (bird's eye view)
-    m_mouseView->setCenter(0.0f, 0.0f, 0.0f);
-    // Approximate original view: yaw = 0 deg, pitch = -60 deg, radius = 50 m
-    constexpr float DEG2RAD = 3.14159265f / 180.0f;
-    m_mouseView->setRadiusFromCenter(50.0f);
-    m_mouseView->setAngleFromCenter(0.0f, -60.0f * DEG2RAD);
-
-    return true;
-}
-
-//------------------------------------------------------------------------------
-// Initialize Render Buffers
-//------------------------------------------------------------------------------
-bool FusionEngineApp::initRenderBuffers()
-{
-    std::cout << "Initializing render buffers..." << std::endl;
-
-    // Point cloud buffer (for LiDAR points)
-    // Each point rendered as 3D vertex (x, y, z)
-    CHECK_DW_ERROR(dwRenderEngine_createBuffer(
-        &m_pointCloudBufferId,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-        sizeof(float) * 3,  // vertex stride
-        0,                  // offset
-        MAX_LIDAR_POINTS,   // max primitives
-        m_renderEngine));
-
-    // Detection bounding box lines buffer
-    // Each 3D box = 12 edges (line primitives)
-    CHECK_DW_ERROR(dwRenderEngine_createBuffer(
-        &m_detectionLineBufferId,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-        sizeof(float) * 3,                // vertex stride
-        0,                                // offset
-        MAX_FUSED_DETECTIONS * 12,        // max line primitives
-        m_renderEngine));
-
-    // Free space points (match lidar IPC visualization sample)
-    CHECK_DW_ERROR(dwRenderEngine_createBuffer(
-        &m_freeSpaceBufferId,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-        sizeof(float) * 3,
-        0,
-        MAX_FREE_SPACE_POINTS,
-        m_renderEngine));
-
-    // Ground plane triangles (grid mesh like lidar IPC visualization sample)
-    const uint32_t GROUND_GRID_SIZE = 21;
-    const uint32_t groundTriangles = (GROUND_GRID_SIZE - 1) * (GROUND_GRID_SIZE - 1) * 2;
-    CHECK_DW_ERROR(dwRenderEngine_createBuffer(
-        &m_groundPlaneBufferId,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
-        sizeof(float) * 3,
-        0,
-        groundTriangles * 3,  // 3 vertices per triangle
-        m_renderEngine));
-
-    return true;
-}
-
-//------------------------------------------------------------------------------
-// Initialize Fusion Engine
-//------------------------------------------------------------------------------
-bool FusionEngineApp::initFusionEngine()
-{
-    std::cout << "Initializing fusion engine..." << std::endl;
-    std::cout << "  LiDAR server: " << m_lidarIP << ":" << m_lidarPort
-              << (m_enableLidar ? " (enabled)" : " (disabled)") << std::endl;
-    std::cout << "  Camera server: " << m_cameraIP << ":" << m_cameraBasePort
-              << "-" << (m_cameraBasePort + m_numCameras - 1)
-              << (m_enableCameras ? " (enabled)" : " (disabled)") << std::endl;
-
-    // Configure fusion engine
-    m_fusionConfig.enableLidar = m_enableLidar;
-    m_fusionConfig.lidarServerIP = m_lidarIP;
-    m_fusionConfig.lidarServerPort = m_lidarPort;
-
-    m_fusionConfig.enableCameras = m_enableCameras;
-    m_fusionConfig.numCameras = m_numCameras;
-    m_fusionConfig.cameraServerIP = m_cameraIP;
-    m_fusionConfig.cameraServerBasePort = m_cameraBasePort;
-
-    m_fusionConfig.asyncReceive = m_asyncMode;
-    m_fusionConfig.connectionRetries = 30;
-    m_fusionConfig.connectionTimeoutUs = 1000000;
-
-    // Synchronization settings
-    m_fusionConfig.syncConfig.enableLidar = m_enableLidar;
-    m_fusionConfig.syncConfig.enableCameras = m_enableCameras;
-    m_fusionConfig.syncConfig.numCameras = m_numCameras;
-    m_fusionConfig.syncConfig.maxTimeDifferenceUs = 50000;  // 50ms
-    m_fusionConfig.syncConfig.policy =
-        SynchronizerConfig::FusionPolicy::LATEST_AVAILABLE;
-
-    // Fusion settings
-    m_fusionConfig.iouThreshold = 0.3f;
-    m_fusionConfig.confidenceThreshold = 0.5f;
-
-    // Initialize
-    if (!m_fusionEngine->initialize(m_context, m_fusionConfig))
-    {
-        std::cerr << "Failed to initialize fusion engine" << std::endl;
-        return false;
-    }
-
-    // Connect to servers
-    std::cout << "Connecting to sensor servers..." << std::endl;
-    if (!m_fusionEngine->connect())
-    {
-        std::cerr << "Warning: Failed to connect to all servers" << std::endl;
-        // Continue anyway - some servers might come online later
-    }
-
-    // Set fusion callback
-    m_fusionEngine->setFusionCallback([this](const FusedPacket& packet) {
-        static std::atomic<uint64_t> cbCount{0};
-        uint64_t n = ++cbCount;
-        if (n <= 5)
+        if (!client->isConnected())
         {
-            std::cout << "[FusionEngineApp] Fusion callback #" << n
-                      << " frame=" << packet.lidarFrameNumber
-                      << " points=" << packet.lidarData.numPoints
-                      << " detections=" << packet.lidarData.detections.size()
-                      << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
         }
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        m_currentPacket = packet;
-        m_hasPacket = true;
-    });
 
-    // Start processing
-    m_fusionEngine->start();
-
-    return true;
-}
-
-//------------------------------------------------------------------------------
-// Release
-//------------------------------------------------------------------------------
-void FusionEngineApp::onRelease()
-{
-    std::cout << "Releasing resources..." << std::endl;
-
-    // Stop and release fusion engine
-    if (m_fusionEngine)
-    {
-        m_fusionEngine->release();
-    }
-
-    // Destroy render buffers
-    if (m_renderEngine != DW_NULL_HANDLE)
-    {
-        dwRenderEngine_destroyBuffer(m_pointCloudBufferId, m_renderEngine);
-        dwRenderEngine_destroyBuffer(m_detectionLineBufferId, m_renderEngine);
-        if (m_freeSpaceBufferId != 0)
-            dwRenderEngine_destroyBuffer(m_freeSpaceBufferId, m_renderEngine);
-        if (m_groundPlaneBufferId != 0)
-            dwRenderEngine_destroyBuffer(m_groundPlaneBufferId, m_renderEngine);
-    }
-
-    // Release render engine
-    if (m_renderEngine != DW_NULL_HANDLE)
-    {
-        dwRenderEngine_release(m_renderEngine);
-    }
-
-    // Release visualization
-    if (m_viz != DW_NULL_HANDLE)
-    {
-        dwVisualizationRelease(m_viz);
-    }
-
-    // Release DriveWorks context
-    if (m_context != DW_NULL_HANDLE)
-    {
-        dwRelease(m_context);
-    }
-
-    std::cout << "Release complete" << std::endl;
-}
-
-//------------------------------------------------------------------------------
-// Process
-//------------------------------------------------------------------------------
-void FusionEngineApp::onProcess()
-{
-    // In synchronous mode, call process() to drive the fusion engine
-    if (!m_asyncMode)
-    {
-        m_fusionEngine->process();
-    }
-
-    // Update FPS counter
-    m_frameCount++;
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       now - m_lastStatTime)
-                       .count();
-
-    if (elapsed >= 1000)
-    {
-        m_fps = static_cast<float>(m_frameCount) * 1000.0f /
-                static_cast<float>(elapsed);
-        m_frameCount = 0;
-        m_lastStatTime = now;
-    }
-}
-
-//------------------------------------------------------------------------------
-// Render
-//------------------------------------------------------------------------------
-void FusionEngineApp::onRender()
-{
-    // Get latest fused packet
-    FusedPacket packet;
-    {
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        if (m_hasPacket)
+        CameraFrameData frameData;
+        if (client->receive(frameData))
         {
-            packet = m_currentPacket;
-        }
-    }
+            // Push to synchronizer
+            synchronizer->pushCameraData(camIndex, frameData);
+            (*frameCount)++;
 
-    // Begin rendering
-    CHECK_DW_ERROR(dwRenderEngine_setTile(m_mainTile, m_renderEngine));
-
-    // Set camera transformation from mouse view
-    const dwMatrix4f* modelView = m_mouseView->getModelView();
-    const dwMatrix4f* projection = m_mouseView->getProjection();
-    CHECK_DW_ERROR(
-        dwRenderEngine_setModelView(modelView, m_renderEngine));
-    CHECK_DW_ERROR(
-        dwRenderEngine_setProjection(projection, m_renderEngine));
-
-    // Clear background
-    CHECK_DW_ERROR(dwRenderEngine_setBackgroundColor(
-        {0.1f, 0.1f, 0.1f, 1.0f}, m_renderEngine));
-
-    // Render coordinate axes (small reference at origin)
-    float axisLength = 2.0f;
-    float axisVerts[] = {
-        // X axis (red)
-        0.0f, 0.0f, 0.0f, axisLength, 0.0f, 0.0f,
-        // Y axis (green)
-        0.0f, 0.0f, 0.0f, 0.0f, axisLength, 0.0f,
-        // Z axis (blue)
-        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, axisLength};
-
-    // Render LiDAR point cloud
-    if (packet.valid && packet.lidarData.valid)
-    {
-        renderLidarPointCloud();
-    }
-
-    // Render ground plane (like lidar_object_detection_ipc_visualization sample)
-    if (packet.valid && packet.lidarData.valid && packet.lidarData.groundPlane.valid)
-    {
-        renderGroundPlane();
-    }
-
-    // Render bounding boxes: fused detections when cameras enabled, else raw LiDAR boxes
-    if (packet.valid)
-    {
-        renderDetections();
-    }
-
-    // Render free space (like lidar_object_detection_ipc_visualization sample)
-    if (packet.valid && packet.lidarData.valid && packet.lidarData.freeSpace.numPoints > 0)
-    {
-        renderFreeSpace();
-    }
-
-    // Render status overlay
-    renderStatusOverlay();
-}
-
-//------------------------------------------------------------------------------
-// Render LiDAR Point Cloud
-//------------------------------------------------------------------------------
-void FusionEngineApp::renderLidarPointCloud()
-{
-    FusedPacket packet;
-    {
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        packet = m_currentPacket;
-    }
-
-    if (!packet.lidarData.valid || packet.lidarData.numPoints == 0)
-    {
-        return;
-    }
-
-    // Map point cloud buffer
-    float* pointBuffer = nullptr;
-    uint32_t numPoints = std::min(packet.lidarData.numPoints, MAX_LIDAR_POINTS);
-    uint32_t sizeBytes = numPoints * 3U * sizeof(float);
-
-    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
-        m_pointCloudBufferId,
-        reinterpret_cast<void**>(&pointBuffer),
-        0,
-        sizeBytes,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-        m_renderEngine));
-
-    // Copy points (x, y, z only - skip intensity)
-    for (uint32_t i = 0; i < numPoints; ++i)
-    {
-        pointBuffer[i * 3 + 0] = packet.lidarData.points[i * 4 + 0];  // x
-        pointBuffer[i * 3 + 1] = packet.lidarData.points[i * 4 + 1];  // y
-        pointBuffer[i * 3 + 2] = packet.lidarData.points[i * 4 + 2];  // z
-    }
-
-    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
-        m_pointCloudBufferId,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-        m_renderEngine));
-
-    // Render points in green
-    CHECK_DW_ERROR(dwRenderEngine_setColor({0.0f, 1.0f, 0.0f, 0.8f},
-                                           m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_setPointSize(m_pointSize, m_renderEngine));
-    CHECK_DW_ERROR(
-        dwRenderEngine_renderBuffer(m_pointCloudBufferId, numPoints, m_renderEngine));
-}
-
-//------------------------------------------------------------------------------
-// Render Detections
-//------------------------------------------------------------------------------
-void FusionEngineApp::renderDetections()
-{
-    FusedPacket packet;
-    {
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        packet = m_currentPacket;
-    }
-
-    // When cameras disabled (LiDAR-only), fusedDetections is empty; draw raw LiDAR boxes
-    if (packet.fusedDetections.empty())
-    {
-        if (!packet.lidarData.detections.empty())
-        {
-            renderLidarBoundingBoxes();
-        }
-        return;
-    }
-
-    // Color coding by source type
-    const float colorLidarOnly[] = {1.0f, 0.0f, 0.0f, 1.0f};   // Red
-    const float colorCameraOnly[] = {0.0f, 0.0f, 1.0f, 1.0f};  // Blue
-    const float colorFused[] = {1.0f, 1.0f, 0.0f, 1.0f};       // Yellow
-
-    for (const auto& det : packet.fusedDetections)
-    {
-        const float* color;
-        if (det.hasLidarSource && det.hasCameraSource)
-        {
-            color = colorFused;
-        }
-        else if (det.hasLidarSource)
-        {
-            color = colorLidarOnly;
+            // Print periodic updates
+            uint64_t count = frameCount->load();
+            if (count <= 3 || count % 100 == 0)
+            {
+                std::cout << "[Cam" << camIndex << "] Frame #" << count
+                          << " | ID:" << frameData.frameId
+                          << " | Size:" << frameData.width << "x"
+                          << frameData.height
+                          << " | 2D:" << frameData.boxes2D.size()
+                          << " | 3D:" << frameData.boxes3D.size()
+                          << std::endl;
+            }
         }
         else
         {
-            color = colorCameraOnly;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-
-        render3DBox(det, color);
     }
+
+    std::cout << "[Thread] Camera " << camIndex << " receive thread stopped"
+              << std::endl;
 }
 
 //------------------------------------------------------------------------------
-// Render LiDAR Bounding Boxes (raw detections when cameras disabled)
-// Matches lidar_object_detection_ipc_visualization: Vehicle=red, Pedestrian=green, Cyclist=blue
+// LiDAR receive thread function
 //------------------------------------------------------------------------------
-void FusionEngineApp::renderLidarBoundingBoxes()
+void lidarReceiveThread(LidarIPCClient* client,
+                        SensorSynchronizer* synchronizer,
+                        std::atomic<uint64_t>* frameCount)
 {
-    FusedPacket packet;
-    {
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        packet = m_currentPacket;
-    }
+    std::cout << "[Thread] LiDAR receive thread started" << std::endl;
 
-    const std::vector<LidarBoundingBox>& detections = packet.lidarData.detections;
-    if (detections.empty())
+    while (g_running)
     {
-        return;
-    }
-
-    // Group by class (same as 5.20 IPC visualization sample)
-    std::vector<const LidarBoundingBox*> vehicleBoxes;
-    std::vector<const LidarBoundingBox*> pedestrianBoxes;
-    std::vector<const LidarBoundingBox*> cyclistBoxes;
-
-    for (const auto& box : detections)
-    {
-        switch (box.classId)
+        if (!client->isConnected())
         {
-        case 0: vehicleBoxes.push_back(&box); break;
-        case 1: pedestrianBoxes.push_back(&box); break;
-        case 2: cyclistBoxes.push_back(&box); break;
-        default: vehicleBoxes.push_back(&box); break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
         }
-    }
 
-    auto renderBoxGroup = [this](const std::vector<const LidarBoundingBox*>& boxes,
-                                  const float* color)
-    {
-        if (boxes.empty())
-            return;
-
-        const uint32_t verticesPerBox = 24;  // 12 edges * 2 vertices
-        const uint32_t totalVertices = static_cast<uint32_t>(boxes.size()) * verticesPerBox;
-        const uint32_t sizeBytes = totalVertices * 3U * sizeof(float);
-
-        float* buffer = nullptr;
-        CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
-            m_detectionLineBufferId,
-            reinterpret_cast<void**>(&buffer),
-            0,
-            sizeBytes,
-            DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-            m_renderEngine));
-
-        uint32_t vertexIndex = 0;
-        int edges[12][2] = {
-            {0, 1}, {1, 2}, {2, 3}, {3, 0},
-            {4, 5}, {5, 6}, {6, 7}, {7, 4},
-            {0, 4}, {1, 5}, {2, 6}, {3, 7}
-        };
-
-        for (const LidarBoundingBox* pbox : boxes)
+        LidarFrameData frameData;
+        if (client->receive(frameData))
         {
-            const LidarBoundingBox& box = *pbox;
-            float hw = box.width / 2.0f;
-            float hl = box.length / 2.0f;
-            float hh = box.height / 2.0f;
-            float cosR = std::cos(box.rotation);
-            float sinR = std::sin(box.rotation);
+            // Push to synchronizer
+            synchronizer->pushLidarData(frameData);
+            (*frameCount)++;
 
-            float localCorners[8][3] = {
-                {-hw, -hl, -hh}, {hw, -hl, -hh}, {hw, hl, -hh}, {-hw, hl, -hh},
-                {-hw, -hl, hh},  {hw, -hl, hh},  {hw, hl, hh},  {-hw, hl, hh}
-            };
-            float corners[8][3];
-            for (int i = 0; i < 8; ++i)
+            // Print periodic updates
+            uint64_t count = frameCount->load();
+            if (count <= 3 || count % 100 == 0)
             {
-                float x = localCorners[i][0];
-                float y = localCorners[i][1];
-                corners[i][0] = box.x + x * cosR - y * sinR;
-                corners[i][1] = box.y + x * sinR + y * cosR;
-                corners[i][2] = box.z + localCorners[i][2];
-            }
-
-            for (int i = 0; i < 12 && vertexIndex + 6 <= totalVertices * 3; ++i)
-            {
-                int v0 = edges[i][0];
-                int v1 = edges[i][1];
-                buffer[vertexIndex++] = corners[v0][0];
-                buffer[vertexIndex++] = corners[v0][1];
-                buffer[vertexIndex++] = corners[v0][2];
-                buffer[vertexIndex++] = corners[v1][0];
-                buffer[vertexIndex++] = corners[v1][1];
-                buffer[vertexIndex++] = corners[v1][2];
+                std::cout << "[LiDAR] Frame #" << count
+                          << " | Pts:" << frameData.numPoints
+                          << " | Det:" << frameData.detections.size()
+                          << " | ICP:" << (frameData.icpAligned ? "Y" : "N")
+                          << " | GndPlane:"
+                          << (frameData.groundPlane.valid ? "Y" : "N")
+                          << std::endl;
             }
         }
-
-        CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
-            m_detectionLineBufferId,
-            DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-            m_renderEngine));
-
-        uint32_t numVertices = vertexIndex / 3;  // vertexIndex counts floats
-        if (numVertices > 0)
+        else
         {
-            CHECK_DW_ERROR(dwRenderEngine_setColor(
-                {color[0], color[1], color[2], color[3]}, m_renderEngine));
-            CHECK_DW_ERROR(dwRenderEngine_setLineWidth(2.0f, m_renderEngine));
-            CHECK_DW_ERROR(dwRenderEngine_renderBuffer(
-                m_detectionLineBufferId, numVertices, m_renderEngine));
-        }
-    };
-
-    const float colorVehicle[] = {1.0f, 0.0f, 0.0f, 1.0f};
-    const float colorPedestrian[] = {0.0f, 1.0f, 0.0f, 1.0f};
-    const float colorCyclist[] = {0.0f, 0.0f, 1.0f, 1.0f};
-    renderBoxGroup(vehicleBoxes, colorVehicle);
-    renderBoxGroup(pedestrianBoxes, colorPedestrian);
-    renderBoxGroup(cyclistBoxes, colorCyclist);
-}
-
-//------------------------------------------------------------------------------
-// Render Free Space (like lidar_object_detection_ipc_visualization sample)
-//------------------------------------------------------------------------------
-void FusionEngineApp::renderFreeSpace()
-{
-    FusedPacket packet;
-    {
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        packet = m_currentPacket;
-    }
-
-    const auto& freeSpace = packet.lidarData.freeSpace;
-    if (freeSpace.numPoints == 0)
-    {
-        return;
-    }
-
-    uint32_t numPoints = std::min(freeSpace.numPoints, MAX_FREE_SPACE_POINTS);
-    uint32_t sizeBytes = numPoints * 3U * sizeof(float);
-
-    float* vertices = nullptr;
-    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
-        m_freeSpaceBufferId,
-        reinterpret_cast<void**>(&vertices),
-        0,
-        sizeBytes,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-        m_renderEngine));
-
-    for (uint32_t i = 0; i < numPoints; ++i)
-    {
-        vertices[i * 3 + 0] = freeSpace.points[i * 3 + 0];
-        vertices[i * 3 + 1] = freeSpace.points[i * 3 + 1];
-        vertices[i * 3 + 2] = 0.0f;  // Free space at ground level
-    }
-
-    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
-        m_freeSpaceBufferId,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
-        m_renderEngine));
-
-    CHECK_DW_ERROR(dwRenderEngine_setColor({0.0f, 1.0f, 0.0f, 0.6f}, m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_setPointSize(3.0f, m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_renderBuffer(m_freeSpaceBufferId, numPoints, m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_setPointSize(m_pointSize, m_renderEngine));
-}
-
-//------------------------------------------------------------------------------
-// Render Ground Plane (like lidar_object_detection_ipc_visualization sample)
-//------------------------------------------------------------------------------
-void FusionEngineApp::renderGroundPlane()
-{
-    FusedPacket packet;
-    {
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        packet = m_currentPacket;
-    }
-
-    const GroundPlaneData& plane = packet.lidarData.groundPlane;
-    if (!plane.valid)
-    {
-        return;
-    }
-
-    const uint32_t GRID_SIZE = 21;
-    const uint32_t gridTriangles = (GRID_SIZE - 1) * (GRID_SIZE - 1) * 2;
-    const uint32_t gridVertices = gridTriangles * 3;
-    const uint32_t bufferSize = gridVertices * 3U * sizeof(float);
-
-    float* vertices = nullptr;
-    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
-        m_groundPlaneBufferId,
-        reinterpret_cast<void**>(&vertices),
-        0,
-        bufferSize,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
-        m_renderEngine));
-
-    const float gridSpacing = 10.0f;
-    const float gridStart = -100.0f;
-    uint32_t vertexIndex = 0;
-
-    auto calcZ = [&](float x, float y)
-    {
-        if (std::abs(plane.normalZ) > 0.01f)
-        {
-            return (-plane.offset - plane.normalX * x - plane.normalY * y) / plane.normalZ;
-        }
-        return 0.0f;
-    };
-
-    for (uint32_t i = 0; i < GRID_SIZE - 1; ++i)
-    {
-        for (uint32_t j = 0; j < GRID_SIZE - 1; ++j)
-        {
-            float x0 = gridStart + i * gridSpacing;
-            float y0 = gridStart + j * gridSpacing;
-            float x1 = x0 + gridSpacing;
-            float y1 = y0 + gridSpacing;
-
-            vertices[vertexIndex++] = x0;
-            vertices[vertexIndex++] = y0;
-            vertices[vertexIndex++] = calcZ(x0, y0);
-            vertices[vertexIndex++] = x1;
-            vertices[vertexIndex++] = y0;
-            vertices[vertexIndex++] = calcZ(x1, y0);
-            vertices[vertexIndex++] = x1;
-            vertices[vertexIndex++] = y1;
-            vertices[vertexIndex++] = calcZ(x1, y1);
-
-            vertices[vertexIndex++] = x0;
-            vertices[vertexIndex++] = y0;
-            vertices[vertexIndex++] = calcZ(x0, y0);
-            vertices[vertexIndex++] = x1;
-            vertices[vertexIndex++] = y1;
-            vertices[vertexIndex++] = calcZ(x1, y1);
-            vertices[vertexIndex++] = x0;
-            vertices[vertexIndex++] = y1;
-            vertices[vertexIndex++] = calcZ(x0, y1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
-    CHECK_DW_ERROR(dwRenderEngine_unmapBuffer(
-        m_groundPlaneBufferId,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_TRIANGLES_3D,
-        m_renderEngine));
-
-    CHECK_DW_ERROR(dwRenderEngine_setColor({0.4f, 0.3f, 0.2f, 0.7f}, m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_renderBuffer(
-        m_groundPlaneBufferId, vertexIndex / 3, m_renderEngine));
+    std::cout << "[Thread] LiDAR receive thread stopped" << std::endl;
 }
 
 //------------------------------------------------------------------------------
-// Render 3D Bounding Box
+// Fusion thread function - processes synchronized packets
 //------------------------------------------------------------------------------
-void FusionEngineApp::render3DBox(const FusedDetection& det, const float* color)
+void fusionThread(SensorSynchronizer* synchronizer,
+                  std::atomic<uint64_t>* fusedCount)
 {
-    // Box corners in local frame (centered at origin)
-    float hw = det.width / 2.0f;
-    float hl = det.length / 2.0f;
-    float hh = det.height / 2.0f;
+    std::cout << "[Thread] Fusion thread started" << std::endl;
 
-    // 8 corners: bottom 4, top 4
-    float corners[8][3] = {
-        {-hw, -hl, 0.0f},  // 0: bottom-left-front
-        {hw, -hl, 0.0f},   // 1: bottom-right-front
-        {hw, hl, 0.0f},    // 2: bottom-right-back
-        {-hw, hl, 0.0f},   // 3: bottom-left-back
-        {-hw, -hl, hh * 2},    // 4: top-left-front
-        {hw, -hl, hh * 2},     // 5: top-right-front
-        {hw, hl, hh * 2},      // 6: top-right-back
-        {-hw, hl, hh * 2}      // 7: top-left-back
-    };
-
-    // Apply rotation around Z axis
-    float cosR = std::cos(det.rotation);
-    float sinR = std::sin(det.rotation);
-
-    float transformed[8][3];
-    for (int i = 0; i < 8; ++i)
+    while (g_running)
     {
-        float x = corners[i][0];
-        float y = corners[i][1];
-
-        transformed[i][0] = det.x + x * cosR - y * sinR;
-        transformed[i][1] = det.y + x * sinR + y * cosR;
-        transformed[i][2] = det.z + corners[i][2];
-    }
-
-    // 12 edges: 4 bottom, 4 top, 4 vertical
-    int edges[12][2] = {
-        // Bottom face
-        {0, 1}, {1, 2}, {2, 3}, {3, 0},
-        // Top face
-        {4, 5}, {5, 6}, {6, 7}, {7, 4},
-        // Vertical edges
-        {0, 4}, {1, 5}, {2, 6}, {3, 7}};
-
-    // Build line vertices
-    float lineVerts[12 * 6];  // 12 edges * 2 vertices * 3 coords
-    for (int i = 0; i < 12; ++i)
-    {
-        int v0 = edges[i][0];
-        int v1 = edges[i][1];
-
-        lineVerts[i * 6 + 0] = transformed[v0][0];
-        lineVerts[i * 6 + 1] = transformed[v0][1];
-        lineVerts[i * 6 + 2] = transformed[v0][2];
-        lineVerts[i * 6 + 3] = transformed[v1][0];
-        lineVerts[i * 6 + 4] = transformed[v1][1];
-        lineVerts[i * 6 + 5] = transformed[v1][2];
-    }
-
-    // Map buffer and copy
-    float* buffer = nullptr;
-    uint32_t sizeBytes = sizeof(lineVerts);
-
-    CHECK_DW_ERROR(dwRenderEngine_mapBuffer(
-        m_detectionLineBufferId,
-        reinterpret_cast<void**>(&buffer),
-        0,
-        sizeBytes,
-        DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-        m_renderEngine));
-
-    std::memcpy(buffer, lineVerts, sizeBytes);
-
-    CHECK_DW_ERROR(
-        dwRenderEngine_unmapBuffer(
-            m_detectionLineBufferId,
-            DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
-            m_renderEngine));
-
-    // Render
-    CHECK_DW_ERROR(dwRenderEngine_setColor(
-        {color[0], color[1], color[2], color[3]}, m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_setLineWidth(2.0f, m_renderEngine));
-    CHECK_DW_ERROR(
-        dwRenderEngine_renderBuffer(m_detectionLineBufferId, 24, m_renderEngine));
-}
-
-//------------------------------------------------------------------------------
-// Render Status Overlay
-//------------------------------------------------------------------------------
-void FusionEngineApp::renderStatusOverlay()
-{
-    FusedPacket packet;
-    {
-        std::lock_guard<std::mutex> lock(m_packetMutex);
-        packet = m_currentPacket;
-    }
-
-    // Build status text
-    char statusText[1024];
-    int offset = 0;
-
-    offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                       "FusionEngine Status\n");
-    offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                       "FPS: %.1f\n", m_fps);
-    offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                       "Fused Packets: %lu\n",
-                       m_fusionEngine->getFusedPacketsProduced());
-
-    // Sensor status
-    if (m_enableLidar)
-    {
-        const char* lidarStatus = "Unknown";
-        switch (m_fusionEngine->getLidarStatus())
+        FusedPacket fusedPacket;
+        if (synchronizer->trySync(fusedPacket))
         {
-        case SensorStatus::DISCONNECTED:
-            lidarStatus = "Disconnected";
-            break;
-        case SensorStatus::CONNECTING:
-            lidarStatus = "Connecting";
-            break;
-        case SensorStatus::CONNECTED:
-            lidarStatus = "Connected";
-            break;
-        case SensorStatus::RECEIVING:
-            lidarStatus = "Receiving";
-            break;
-        case SensorStatus::ERROR:
-            lidarStatus = "Error";
-            break;
-        }
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "LiDAR: %s (pkts: %lu)\n", lidarStatus,
-                           m_fusionEngine->getLidarPacketsReceived());
-    }
+            (*fusedCount)++;
 
-    if (m_enableCameras)
-    {
-        for (uint32_t i = 0; i < m_numCameras; ++i)
-        {
-            const char* camStatus = "Unknown";
-            switch (m_fusionEngine->getCameraStatus(i))
+            // Count contributing sensors
+            uint32_t camCount = 0;
+            for (uint32_t i = 0; i < MAX_CAMERAS; ++i)
             {
-            case SensorStatus::DISCONNECTED:
-                camStatus = "Disc";
-                break;
-            case SensorStatus::CONNECTING:
-                camStatus = "Conn...";
-                break;
-            case SensorStatus::CONNECTED:
-                camStatus = "Conn";
-                break;
-            case SensorStatus::RECEIVING:
-                camStatus = "Recv";
-                break;
-            case SensorStatus::ERROR:
-                camStatus = "Err";
-                break;
+                if (fusedPacket.cameraData[i].valid)
+                {
+                    camCount++;
+                }
             }
-            offset +=
-                snprintf(statusText + offset, sizeof(statusText) - offset,
-                         "Cam%d: %s (frames: %lu)\n", i, camStatus,
-                         m_fusionEngine->getCameraFramesReceived(i));
+
+            // Print periodic updates
+            uint64_t count = fusedCount->load();
+            if (count <= 5 || count % 50 == 0)
+            {
+                std::cout << "[Fusion] Packet #" << count
+                          << " | LiDAR:" << (fusedPacket.lidarData.valid ? "Y" : "N")
+                          << " | Cams:" << camCount
+                          << " | AlignErr:" << fusedPacket.temporalAlignmentError
+                          << "ms" << std::endl;
+
+                if (fusedPacket.lidarData.valid)
+                {
+                    std::cout << "         LiDAR det: "
+                              << fusedPacket.lidarData.detections.size()
+                              << std::endl;
+                }
+            }
+        }
+        else
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
 
-    // Current packet info
-    if (packet.valid)
-    {
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "\nCurrent Packet:\n");
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "  Frame: %u\n", packet.fusionFrameNumber);
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "  LiDAR Points: %u\n", packet.lidarData.numPoints);
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "  Detections: %zu\n", packet.fusedDetections.size());
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "    Fused: %u\n", packet.numFusedDetections);
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "    LiDAR-only: %u\n", packet.numLidarOnlyDetections);
-        offset += snprintf(statusText + offset, sizeof(statusText) - offset,
-                           "    Camera-only: %u\n", packet.numCameraOnlyDetections);
-    }
-
-    // Render text
-    CHECK_DW_ERROR(dwRenderEngine_setColor({1.0f, 1.0f, 1.0f, 1.0f}, m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_setFont(DW_RENDER_ENGINE_FONT_VERDANA_16, m_renderEngine));
-    CHECK_DW_ERROR(dwRenderEngine_renderText2D(statusText, {10.0f, 30.0f}, m_renderEngine));
-
-    // Legend
-    char legendText[256];
-    snprintf(legendText, sizeof(legendText),
-             "Legend:\n"
-             "  Red: LiDAR-only\n"
-             "  Blue: Camera-only\n"
-             "  Yellow: Fused");
-
-    CHECK_DW_ERROR(dwRenderEngine_renderText2D(
-        legendText, {static_cast<float>(m_windowWidth) - 150.0f, 30.0f}, m_renderEngine));
+    std::cout << "[Thread] Fusion thread stopped" << std::endl;
 }
 
 //------------------------------------------------------------------------------
-// Input Handlers
+// Print statistics
 //------------------------------------------------------------------------------
-void FusionEngineApp::onKeyDown(int key, int /*scancode*/, int /*mods*/)
+void printStats(uint32_t numCameras,
+                const std::vector<std::atomic<uint64_t>*>& camCounts,
+                const std::atomic<uint64_t>& lidarCount,
+                const std::atomic<uint64_t>& fusedCount,
+                const std::vector<std::unique_ptr<CameraIPCClient>>& camClients,
+                const LidarIPCClient& lidarClient,
+                const SensorSynchronizer& synchronizer)
 {
-    if (key == GLFW_KEY_ESCAPE)
-    {
-        stop();
-    }
-    else if (key == GLFW_KEY_R)
-    {
-        // Reset camera view
-        m_mouseView->setCenter(0.0f, 0.0f, 0.0f);
-        constexpr float DEG2RAD = 3.14159265f / 180.0f;
-        m_mouseView->setRadiusFromCenter(50.0f);
-        m_mouseView->setAngleFromCenter(0.0f, -60.0f * DEG2RAD);
-    }
-    else if (key == GLFW_KEY_EQUAL || key == GLFW_KEY_KP_ADD)
-    {
-        m_pointSize = std::min(m_pointSize + 0.5f, 10.0f);
-    }
-    else if (key == GLFW_KEY_MINUS || key == GLFW_KEY_KP_SUBTRACT)
-    {
-        m_pointSize = std::max(m_pointSize - 0.5f, 1.0f);
-    }
-}
+    std::cout << "\n========== Statistics ==========\n";
 
-void FusionEngineApp::onMouseMove(float x, float y)
-{
-    m_mouseView->mouseMove(x, y);
-}
+    // Camera stats
+    for (uint32_t i = 0; i < numCameras; ++i)
+    {
+        std::cout << "Camera " << i << ": "
+                  << camCounts[i]->load() << " frames, "
+                  << camClients[i]->getReceiveErrors() << " errors, "
+                  << "Q:" << synchronizer.getCameraQueueSize(i) << ", "
+                  << "Status: " << sensorStatusToString(camClients[i]->getStatus())
+                  << std::endl;
+    }
 
-void FusionEngineApp::onMouseDown(int button, float x, float y, int /*mods*/)
-{
-    m_mouseView->mouseDown(button, x, y);
-}
+    // LiDAR stats
+    std::cout << "LiDAR:    "
+              << lidarCount.load() << " frames, "
+              << lidarClient.getReceiveErrors() << " errors, "
+              << "Q:" << synchronizer.getLidarQueueSize() << ", "
+              << "Status: " << sensorStatusToString(lidarClient.getStatus())
+              << std::endl;
 
-void FusionEngineApp::onMouseUp(int button, float x, float y, int /*mods*/)
-{
-    m_mouseView->mouseUp(button, x, y);
-}
+    // Fusion stats
+    std::cout << "Fusion:   "
+              << fusedCount.load() << " synced packets, "
+              << synchronizer.getDroppedLidarFrames() << " dropped LiDAR, "
+              << synchronizer.getDroppedCameraFrames() << " dropped cam"
+              << std::endl;
 
-void FusionEngineApp::onMouseWheel(float /*x*/, float y)
-{
-    m_mouseView->mouseWheel(0.0f, y * 10.0f);
+    std::cout << "================================\n" << std::endl;
 }
 
 //------------------------------------------------------------------------------
-// Main Entry Point
+// Main
 //------------------------------------------------------------------------------
 int main(int argc, const char** argv)
 {
-    // Define program arguments
+    // Parse arguments
     ProgramArguments args(argc, argv,
+                          {
+                              ProgramArguments::Option_t{
+                                  "cam-ip", "127.0.0.1", "Camera server IP"},
+                              ProgramArguments::Option_t{
+                                  "cam-port", "49252", "Camera server base port"},
+                              ProgramArguments::Option_t{
+                                  "lidar-ip", "127.0.0.1", "LiDAR server IP"},
+                              ProgramArguments::Option_t{
+                                  "lidar-port", "40002", "LiDAR server port"},
+                              ProgramArguments::Option_t{
+                                  "num-cameras", "4", "Number of cameras (1-4)"},
+                              ProgramArguments::Option_t{
+                                  "timeout", "30", "Connection timeout (seconds)"},
+                              ProgramArguments::Option_t{
+                                  "sync-policy", "latest",
+                                  "Sync policy: lidar, camera, nearest, latest"},
+                              ProgramArguments::Option_t{
+                                  "max-time-diff", "50000",
+                                  "Max timestamp diff for sync (microseconds)"},
+                          },
+                          "FusionEngine - Multi-Sensor Fusion Pipeline Test");
+
+    std::string camIP = args.get("cam-ip");
+    uint16_t camBasePort = static_cast<uint16_t>(std::stoul(args.get("cam-port")));
+    std::string lidarIP = args.get("lidar-ip");
+    uint16_t lidarPort = static_cast<uint16_t>(std::stoul(args.get("lidar-port")));
+    uint32_t numCameras = static_cast<uint32_t>(std::stoul(args.get("num-cameras")));
+    uint32_t timeoutSec = static_cast<uint32_t>(std::stoul(args.get("timeout")));
+    std::string syncPolicyStr = args.get("sync-policy");
+    dwTime_t maxTimeDiffUs = std::stoull(args.get("max-time-diff"));
+
+    numCameras = std::min(numCameras, MAX_CAMERAS);
+
+    // Parse sync policy
+    SynchronizerConfig::FusionPolicy syncPolicy;
+    if (syncPolicyStr == "lidar")
     {
-        // LiDAR settings
-        // Note: also accept "ip" and "port" as aliases to match the
-        // lidar_object_detection_ipc_visualization sample CLI.
-        ProgramArguments::Option_t{"lidar-ip", "127.0.0.1",
-            "LiDAR server IP address"},
-        ProgramArguments::Option_t{"lidar-port", "40002",
-            "LiDAR server port"},
-        ProgramArguments::Option_t{"ip", "127.0.0.1",
-            "Alias for lidar-ip (LiDAR server IP address)"},
-        ProgramArguments::Option_t{"port", "40002",
-            "Alias for lidar-port (LiDAR server port)"},
-        ProgramArguments::Option_t{"enable-lidar", "1",
-            "Enable LiDAR input (0/1)"},
+        syncPolicy = SynchronizerConfig::FusionPolicy::LIDAR_MASTER;
+    }
+    else if (syncPolicyStr == "camera")
+    {
+        syncPolicy = SynchronizerConfig::FusionPolicy::CAMERA_MASTER;
+    }
+    else if (syncPolicyStr == "nearest")
+    {
+        syncPolicy = SynchronizerConfig::FusionPolicy::NEAREST_TIMESTAMP;
+    }
+    else
+    {
+        syncPolicy = SynchronizerConfig::FusionPolicy::LATEST_AVAILABLE;
+    }
 
-        // Camera settings
-        ProgramArguments::Option_t{"camera-ip", "127.0.0.1",
-            "Camera server IP address"},
-        ProgramArguments::Option_t{"camera-port", "49252",
-            "Camera server base port"},
-        ProgramArguments::Option_t{"num-cameras", "4",
-            "Number of cameras (1-4)"},
-        ProgramArguments::Option_t{"enable-cameras", "1",
-            "Enable camera input (0/1)"},
-        ProgramArguments::Option_t{"enable-camera", "1",
-            "Alias for enable-cameras (Enable camera input (0/1))"},
+    std::cout << "========================================\n";
+    std::cout << " FusionEngine - Multi-Sensor Fusion    \n";
+    std::cout << "========================================\n";
+    std::cout << "Cameras: " << camIP << ":" << camBasePort << "-"
+              << (camBasePort + numCameras - 1) << " (" << numCameras << " cams)\n";
+    std::cout << "LiDAR:   " << lidarIP << ":" << lidarPort << "\n";
+    std::cout << "Timeout: " << timeoutSec << "s\n";
+    std::cout << "Sync:    " << syncPolicyStr << " (max diff: "
+              << maxTimeDiffUs << " us)\n";
+    std::cout << std::endl;
 
-        // Processing settings
-        ProgramArguments::Option_t{"async", "1",
-            "Async receive mode (0/1)"},
+    // Setup signal handler
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
 
-        // Display settings
-        ProgramArguments::Option_t{"width", "1920",
-            "Window width"},
-        ProgramArguments::Option_t{"height", "1080",
-            "Window height"}
-    });
+    // Initialize DriveWorks context
+    std::cout << "[Main] Initializing DriveWorks..." << std::endl;
 
-    // Create and run application
-    FusionEngineApp app(args);
+    dwContextHandle_t context = DW_NULL_HANDLE;
+    dwContextParameters contextParams{};
 
-    app.initializeWindow("FusionEngine - Multi-Sensor Fusion",
-                         std::stoul(args.get("width")),
-                         std::stoul(args.get("height")),
-                         args.get("offscreen") == "1");
+    dwStatus status = dwInitialize(&context, DW_VERSION, &contextParams);
+    if (status != DW_SUCCESS)
+    {
+        std::cerr << "[Main] Failed to initialize DriveWorks: "
+                  << dwGetStatusName(status) << std::endl;
+        return -1;
+    }
 
-    return app.run();
+    dwVersion version{};
+    dwGetVersion(&version);
+    std::cout << "[Main] DriveWorks SDK v" << version.major << "."
+              << version.minor << "." << version.patch << std::endl;
+
+    // Create sensor synchronizer
+    SensorSynchronizer synchronizer;
+    SynchronizerConfig syncConfig;
+    syncConfig.maxTimeDifferenceUs = maxTimeDiffUs;
+    syncConfig.numCameras = numCameras;
+    syncConfig.enableLidar = true;
+    syncConfig.enableCameras = true;
+    syncConfig.policy = syncPolicy;
+    syncConfig.verbose = true;
+    synchronizer.initialize(syncConfig);
+
+    // Create camera clients
+    std::vector<std::unique_ptr<CameraIPCClient>> camClients(numCameras);
+    std::vector<std::atomic<uint64_t>> camCounts(numCameras);
+    std::vector<std::atomic<uint64_t>*> camCountPtrs(numCameras);
+
+    for (uint32_t i = 0; i < numCameras; ++i)
+    {
+        camClients[i] = std::make_unique<CameraIPCClient>();
+        camCounts[i] = 0;
+        camCountPtrs[i] = &camCounts[i];
+    }
+
+    // Create LiDAR client
+    LidarIPCClient lidarClient;
+    std::atomic<uint64_t> lidarCount{0};
+    std::atomic<uint64_t> fusedCount{0};
+
+    // Initialize camera clients
+    std::cout << "\n[Main] Initializing camera clients..." << std::endl;
+    for (uint32_t i = 0; i < numCameras; ++i)
+    {
+        if (!camClients[i]->initialize(context, i, camIP, camBasePort))
+        {
+            std::cerr << "[Main] Failed to initialize camera " << i << std::endl;
+            dwRelease(context);
+            return -1;
+        }
+    }
+
+    // Initialize LiDAR client
+    std::cout << "[Main] Initializing LiDAR client..." << std::endl;
+    if (!lidarClient.initialize(context, lidarIP, lidarPort))
+    {
+        std::cerr << "[Main] Failed to initialize LiDAR client" << std::endl;
+        dwRelease(context);
+        return -1;
+    }
+
+    // Connect camera clients
+    std::cout << "\n[Main] Connecting to camera servers..." << std::endl;
+    uint32_t connectedCams = 0;
+    for (uint32_t i = 0; i < numCameras; ++i)
+    {
+        if (camClients[i]->connect(timeoutSec, 1000000))
+        {
+            connectedCams++;
+        }
+        else
+        {
+            std::cerr << "[Main] Warning: Camera " << i << " not connected"
+                      << std::endl;
+        }
+    }
+
+    // Connect LiDAR client
+    std::cout << "[Main] Connecting to LiDAR server..." << std::endl;
+    bool lidarConnected = lidarClient.connect(timeoutSec, 1000000);
+    if (!lidarConnected)
+    {
+        std::cerr << "[Main] Warning: LiDAR not connected" << std::endl;
+    }
+
+    if (connectedCams == 0 && !lidarConnected)
+    {
+        std::cerr << "[Main] Error: No sensors connected" << std::endl;
+        dwRelease(context);
+        return -1;
+    }
+
+    std::cout << "\n[Main] Connected sensors: " << connectedCams << " cameras, "
+              << (lidarConnected ? "1 LiDAR" : "0 LiDAR") << std::endl;
+
+    // Start receive threads
+    std::cout << "\n[Main] Starting receive threads..." << std::endl;
+    std::vector<std::thread> threads;
+
+    // Camera threads
+    for (uint32_t i = 0; i < numCameras; ++i)
+    {
+        threads.emplace_back(cameraReceiveThread,
+                             camClients[i].get(),
+                             &synchronizer,
+                             camCountPtrs[i]);
+    }
+
+    // LiDAR thread
+    threads.emplace_back(lidarReceiveThread,
+                         &lidarClient,
+                         &synchronizer,
+                         &lidarCount);
+
+    // Fusion thread
+    threads.emplace_back(fusionThread, &synchronizer, &fusedCount);
+
+    std::cout << "\n[Main] Running. Press Ctrl+C to stop.\n" << std::endl;
+
+    // Main loop - print periodic statistics
+    auto lastStatTime = std::chrono::steady_clock::now();
+    while (g_running)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                           now - lastStatTime)
+                           .count();
+
+        if (elapsed >= 5)
+        {
+            printStats(numCameras, camCountPtrs, lidarCount, fusedCount,
+                       camClients, lidarClient, synchronizer);
+            lastStatTime = now;
+        }
+    }
+
+    // Cleanup
+    std::cout << "\n[Main] Stopping..." << std::endl;
+
+    // Join threads
+    for (auto& t : threads)
+    {
+        if (t.joinable())
+        {
+            t.join();
+        }
+    }
+
+    // Print final statistics
+    printStats(numCameras, camCountPtrs, lidarCount, fusedCount,
+               camClients, lidarClient, synchronizer);
+
+    // Release clients
+    for (uint32_t i = 0; i < numCameras; ++i)
+    {
+        camClients[i]->release();
+    }
+    lidarClient.release();
+
+    // Release DriveWorks
+    dwRelease(context);
+
+    std::cout << "[Main] Done." << std::endl;
+    return 0;
 }
