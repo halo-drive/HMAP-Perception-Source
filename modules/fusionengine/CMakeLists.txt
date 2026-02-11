@@ -35,20 +35,17 @@ project(fusionengine)
 #-------------------------------------------------------------------------------
 # Project files
 #-------------------------------------------------------------------------------
+# FusionEngine sources - multi-sensor fusion pipeline
 set(SOURCES
     main.cpp
-    FusionEngine.cpp
-    FusionEngine.hpp
-    LidarIPCClient.hpp
     CameraIPCClient.hpp
-    FusedPacket.hpp
+    LidarIPCClient.hpp
     SensorSynchronizer.hpp
+    FusedPacket.hpp
 )
 
 set(LIBRARIES
     samples_framework
-    samples_framework_checks
-    samples_framework_program_arguments
     ${Driveworks_LIBRARIES}
 )
 
