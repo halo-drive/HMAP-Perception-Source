@@ -86,6 +86,8 @@ private:
     // Visualization
     dwVisualizationContextHandle_t m_visualizationContext = DW_NULL_HANDLE;
     dwRenderEngineHandle_t m_renderEngine = DW_NULL_HANDLE;
+    uint32_t m_gridBuffer = 0;
+    uint32_t m_gridBufferPrimitiveCount = 0;
     uint32_t m_trajectoryBuffer = 0;
     uint32_t m_mapBuffer = 0;
     uint32_t m_currentScanBuffer = 0;
@@ -390,6 +392,24 @@ public:
         renderParams.defaultTile.backgroundColor = {0.0f, 0.0f, 0.1f, 1.0f};
         CHECK_DW_ERROR(dwRenderEngine_initialize(&m_renderEngine, &renderParams, m_visualizationContext));
         
+        // Create ground grid (similar to lidar_replay sample)
+        CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_gridBuffer,
+                                                   DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
+                                                   sizeof(dwVector3f), 0, 10000,
+                                                   m_renderEngine));
+        {
+            dwMatrix4f identity = DW_IDENTITY_MATRIX4F;
+            // Large 3D planar grid centered at origin (200m x 200m, 5m spacing)
+            CHECK_DW_ERROR(dwRenderEngine_setBufferPlanarGrid3D(
+                m_gridBuffer,
+                dwRectf{-100.f, -100.f, 100.f, 100.f}, // minX, minY, maxX, maxY in world coords
+                5.0f, 5.0f,
+                &identity,
+                m_renderEngine));
+            CHECK_DW_ERROR(dwRenderEngine_getBufferMaxPrimitiveCount(
+                &m_gridBufferPrimitiveCount, m_gridBuffer, m_renderEngine));
+        }
+        
         // Create buffers (map uses 4 floats per point for x,y,z,intensity for colored-by-intensity rendering)
         CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_mapBuffer,
                                                    DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
@@ -587,6 +607,12 @@ public:
         dwRenderEngine_setTile(0, m_renderEngine);
         dwRenderEngine_setModelView(getMouseView().getModelView(), m_renderEngine);
         dwRenderEngine_setProjection(getMouseView().getProjection(), m_renderEngine);
+        
+        // Render ground grid in light gray
+        if (m_gridBuffer != 0 && m_gridBufferPrimitiveCount > 0) {
+            dwRenderEngine_setColor({0.3f, 0.3f, 0.3f, 1.0f}, m_renderEngine);
+            dwRenderEngine_renderBuffer(m_gridBuffer, m_gridBufferPrimitiveCount, m_renderEngine);
+        }
         
         // Get pose once (thread-safe, fast)
         Eigen::Matrix4d pose = Eigen::Matrix4d::Identity(); // Default identity
@@ -790,6 +816,11 @@ public:
         m_slam.reset();
         
         // 3) Release buffers (invalidate handles so late onRender is a no-op)
+        if (m_gridBuffer != 0 && m_renderEngine != DW_NULL_HANDLE) {
+            dwRenderEngine_destroyBuffer(m_gridBuffer, m_renderEngine);
+            m_gridBuffer = 0;
+            m_gridBufferPrimitiveCount = 0;
+        }
         if (m_mapBuffer != 0 && m_renderEngine != DW_NULL_HANDLE) {
             dwRenderEngine_destroyBuffer(m_mapBuffer, m_renderEngine);
             m_mapBuffer = 0;

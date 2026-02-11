@@ -631,10 +631,13 @@ void DWFastLIO::processScan() {
         // Using scan start (not scan end) avoids getting stuck when IMU clock is slightly behind lidar.
         const double scan_time_sec = static_cast<double>(cloud->header.stamp) / 1e6;
         const double scan_end_sec = scan_time_sec + config_.scan_period;
-        double imu_max_sec = 0;
+        double imu_min_sec = 0, imu_max_sec = 0;
         {
             std::lock_guard<std::mutex> lock(imu_mutex_);
-            if (!imu_buffer_.empty()) imu_max_sec = imu_buffer_.back().first.stamp;
+            if (!imu_buffer_.empty()) {
+                imu_min_sec = imu_buffer_.front().first.stamp;
+                imu_max_sec = imu_buffer_.back().first.stamp;
+            }
         }
         if (!imu_buffer_.empty()) {
             if (imu_max_sec < scan_time_sec - 0.02) {
@@ -651,14 +654,18 @@ void DWFastLIO::processScan() {
                 // Scan is way behind (e.g. after a gap); drop to avoid processing very late data
                 static int late_drop_count = 0;
                 if (++late_drop_count <= 5 || late_drop_count % 20 == 0) {
-                    std::cout << "[DWFastLIO] [PROCESS] Dropping late scan (gap " << (imu_max_sec - scan_end_sec) << " s), drop #" << late_drop_count << std::endl;
+                    std::cout << "[DWFastLIO] [PROCESS] Dropping late scan (gap " << (imu_max_sec - scan_end_sec)
+                              << " s, imu_range=[" << imu_min_sec << "," << imu_max_sec
+                              << "], scan_time=" << scan_time_sec << "), drop #" << late_drop_count << std::endl;
                 }
                 continue;
             }
         }
         
         std::cout << "[DWFastLIO] [PROCESS] IMU available (" << imu_buffer_size 
-                  << " samples), processing scan with " << cloud->size() << " points..." << std::endl;
+                  << " samples), processing scan with " << cloud->size() << " points..."
+                  << " (scan_time=" << scan_time_sec << "s, imu_range=[" << imu_min_sec << "," << imu_max_sec << "])"
+                  << std::endl;
         
         // Global re-localization on request (e.g. 'R' key) when keyframe map is loaded
         if (!mapping_mode_ && request_reloc_ && global_reloc_ && global_reloc_->keyframeCount() > 0) {
