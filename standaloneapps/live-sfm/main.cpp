@@ -118,6 +118,8 @@ private:
     dwEgomotionHandle_t egomotion           = DW_NULL_HANDLE;
     std::unique_ptr<SygnalPomoParser> m_canParser;
     dwTime_t lastEgoUpdate                  = 0;
+    /// Timestamp from last VehicleIO state added to egomotion (same domain as egomotion history).
+    dwTime_t m_lastVehicleIOTimestampUs     = 0;
     dwTransformation3f egoRig2World         = DW_IDENTITY_TRANSFORMATION3F;
     dwTransformation3f previousEgoRig2World = DW_IDENTITY_TRANSFORMATION3F;
 
@@ -386,9 +388,6 @@ public:
                 log("Failed to load CAN parser configuration, using defaults\n");
             }
             
-            // Configure speed measurement type to match egomotion
-            m_canParser->configureSpeedMeasurementType(egoparams.speedMeasurementType);
-            
             log("SygnalPomoParser initialized for live CAN processing\n");
         }
 
@@ -397,8 +396,10 @@ public:
         // -----------------------------
         dwReconstructorConfig reconstructorConfig;
         dwReconstructor_initConfig(&reconstructorConfig);
-        reconstructorConfig.maxFeatureCount = maxFeatureCount;
-        reconstructorConfig.rig             = rigConfig;
+        reconstructorConfig.maxFeatureCount     = maxFeatureCount;
+        reconstructorConfig.rig                = rigConfig;
+        // Must be large enough for pose history; otherwise updateHistory overflows after N frames (DW_OUT_OF_BOUNDS).
+        reconstructorConfig.maxPoseHistoryLength = static_cast<uint32_t>(FEATURE_HISTORY_SIZE);
 
         CHECK_DW_ERROR(dwReconstructor_initialize(&reconstructor, &reconstructorConfig, cudaStream_t(0), m_context));
 
@@ -869,6 +870,33 @@ public:
                 m_canParser->processCANFrame(canMsg);
             }
         }
+        
+        // Send parsed vehicle state to Egomotion
+        static uint32_t syncFailCount = 0;
+        if (m_canParser) {
+            dwVehicleIOSafetyState safetyState{};
+            dwVehicleIONonSafetyState nonSafetyState{};
+            dwVehicleIOActuationFeedback actuationFeedback{};
+            safetyState.size = sizeof(dwVehicleIOSafetyState);
+            nonSafetyState.size = sizeof(dwVehicleIONonSafetyState);
+            actuationFeedback.size = sizeof(dwVehicleIOActuationFeedback);
+            
+            // Get temporally synchronized state (no recursive locking!)
+            bool hasSync = m_canParser->getTemporallySynchronizedState(&safetyState, &nonSafetyState, &actuationFeedback);
+            
+            if (hasSync) {
+                dwStatus status = dwEgomotion_addVehicleIOState(&safetyState, &nonSafetyState, &actuationFeedback, egomotion);
+                log("Egomotion: data sent status=%d (speed=%.2f m/s, steering=%.3f rad)\n", 
+                    status, nonSafetyState.speedESC, safetyState.steeringWheelAngle);
+                m_lastVehicleIOTimestampUs = nonSafetyState.timestamp_us;
+                syncFailCount = 0;
+            } else {
+                syncFailCount++;
+                if (syncFailCount % 30 == 1) {  // Log every 30 failures
+                    log("getTemporallySynchronizedState failed (count=%u) - data not coherent\n", syncFailCount);
+                }
+            }
+        }
 
         updatePose();
 
@@ -946,21 +974,39 @@ public:
     // isAllCamerasReady function removed - now checking during frame acquisition
     void updatePose()
     {
-        dwTime_t now;
-        CHECK_DW_ERROR(dwImage_getTimestamp(&now, cameras[0].frameCudaYuv));
+        // Use VehicleIO timestamp (same domain as egomotion history). Camera timestamp is in a different clock and causes DW_NOT_AVAILABLE.
+        dwTime_t now = m_lastVehicleIOTimestampUs;
+        if (now == 0) {
+            return; // No VehicleIO state added yet; cannot compute relative transform.
+        }
+
+        // Bootstrap: need at least two timestamps to form a relative transform
+        if (lastEgoUpdate == 0) {
+            lastEgoUpdate = now;
+            return;
+        }
 
         // update current absolute estimate of the pose using relative motion between now and last time
         {
             dwTransformation3f rigLast2rigNow;
-            if (DW_SUCCESS == dwEgomotion_computeRelativeTransformation(&rigLast2rigNow, nullptr, lastEgoUpdate, now, egomotion))
+            dwStatus egoStatus = dwEgomotion_computeRelativeTransformation(&rigLast2rigNow, nullptr, lastEgoUpdate, now, egomotion);
+            log("dwEgomotion_computeRelativeTransformation status=%d\n", egoStatus);
+            if (egoStatus == DW_SUCCESS)
             {
                 // compute absolute pose given the relative motion between two last estimates
                 dwTransformation3f rigNow2World;
                 dwEgomotion_applyRelativeTransformation(&rigNow2World, &rigLast2rigNow, &egoRig2World);
                 egoRig2World = rigNow2World;
+                log("  Motion computed: translation=[%.3f, %.3f, %.3f] m\n", 
+                    rigLast2rigNow.array[0+3*4], rigLast2rigNow.array[1+3*4], rigLast2rigNow.array[2+3*4]);
+                lastEgoUpdate = now;
+            }
+            else
+            {
+                // Keep next request within egomotion history (e.g. after DW_NOT_AVAILABLE)
+                lastEgoUpdate = now;
             }
         }
-        lastEgoUpdate = now;
 
         dwTransformation3f invPreviousEgoRig2World;
         Mat4_IsoInv(invPreviousEgoRig2World.array, previousEgoRig2World.array);
@@ -1145,3 +1191,9 @@ int main(int argc, const char** argv)
 
     return app.run();
 }
+
+
+
+
+
+
