@@ -43,6 +43,11 @@
 #include <ctime>
 #include <algorithm>
 
+// When graph backend is on, LSD types (ImuType, RTKType, etc.) must be defined before DWFastLIO.hpp
+#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
+#include "slam_base.h"
+#endif
+
 // Our SLAM implementation
 #include "DWFastLIO.hpp"
 
@@ -81,6 +86,8 @@ private:
     // Visualization
     dwVisualizationContextHandle_t m_visualizationContext = DW_NULL_HANDLE;
     dwRenderEngineHandle_t m_renderEngine = DW_NULL_HANDLE;
+    uint32_t m_gridBuffer = 0;
+    uint32_t m_gridBufferPrimitiveCount = 0;
     uint32_t m_trajectoryBuffer = 0;
     uint32_t m_mapBuffer = 0;
     uint32_t m_currentScanBuffer = 0;
@@ -131,18 +138,20 @@ public:
             return false;
         }
         
-        // Set process rate to 5-6 FPS to prevent blocking and ensure smooth operation
-        setProcessRate(6);  // 6 FPS for processing
-        setRenderRate(30);  // 30 FPS for rendering (smooth visualization)
+        // High process rate so we drain sensor queues and avoid "queues full, losing packets".
+        // SLAM still processes every 5th scan internally; we just read/deliver data more often.
+        setProcessRate(60);  // 60 FPS processing to drain LiDAR/IMU buffers
+        setRenderRate(30);   // 30 FPS rendering
         
         std::cout << "[DWFastLIO] System initialized successfully" << std::endl;
+        std::cout << "[DWFastLIO] If you see 'queues full, losing packets', run: sudo sysctl -w net.core.rmem_max=16777216 net.core.rmem_default=16777216" << std::endl;
         if (m_gpsSensor == DW_NULL_HANDLE) {
             std::cout << "[DWFastLIO] GPS not available (no GPS in rig, or --gps-params/--gps-protocol not set); RTK will not be fed to Fast-LIO" << std::endl;
         } else {
             std::cout << "[DWFastLIO] GPS available; RTK will be fed to Fast-LIO when valid" << std::endl;
         }
-        std::cout << "[DWFastLIO] Mode: MAPPING" << std::endl;
-        std::cout << "[DWFastLIO] Process rate: 6 FPS, Render rate: 30 FPS" << std::endl;
+        std::cout << "[DWFastLIO] Mode: " << (m_mappingMode ? "MAPPING" : "LOCALIZATION") << std::endl;
+        std::cout << "[DWFastLIO] Process rate: 60 FPS (drain sensors), Render rate: 30 FPS" << std::endl;
         std::cout << "[DWFastLIO] Press 'M' to toggle MAPPING/LOCALIZATION mode" << std::endl;
         std::cout << "[DWFastLIO] Press 'S' to save map" << std::endl;
         std::cout << "[DWFastLIO] Press 'L' to load map" << std::endl;
@@ -383,6 +392,24 @@ public:
         renderParams.defaultTile.backgroundColor = {0.0f, 0.0f, 0.1f, 1.0f};
         CHECK_DW_ERROR(dwRenderEngine_initialize(&m_renderEngine, &renderParams, m_visualizationContext));
         
+        // Create ground grid (similar to lidar_replay sample)
+        CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_gridBuffer,
+                                                   DW_RENDER_ENGINE_PRIMITIVE_TYPE_LINES_3D,
+                                                   sizeof(dwVector3f), 0, 10000,
+                                                   m_renderEngine));
+        {
+            dwMatrix4f identity = DW_IDENTITY_MATRIX4F;
+            // Large 3D planar grid centered at origin (200m x 200m, 5m spacing)
+            CHECK_DW_ERROR(dwRenderEngine_setBufferPlanarGrid3D(
+                m_gridBuffer,
+                dwRectf{-100.f, -100.f, 100.f, 100.f}, // minX, minY, maxX, maxY in world coords
+                5.0f, 5.0f,
+                &identity,
+                m_renderEngine));
+            CHECK_DW_ERROR(dwRenderEngine_getBufferMaxPrimitiveCount(
+                &m_gridBufferPrimitiveCount, m_gridBuffer, m_renderEngine));
+        }
+        
         // Create buffers (map uses 4 floats per point for x,y,z,intensity for colored-by-intensity rendering)
         CHECK_DW_ERROR(dwRenderEngine_createBuffer(&m_mapBuffer,
                                                    DW_RENDER_ENGINE_PRIMITIVE_TYPE_POINTS_3D,
@@ -415,10 +442,13 @@ public:
 
     // Rig path: single event loop (IMU + GPS from same port via one connection).
     void processEventsFromSensorManager() {
-        constexpr int MAX_PROCESS_TIME_MS = 50;
-        constexpr int MAX_EVENTS_PER_FRAME = 256;
+        constexpr int MAX_PROCESS_TIME_MS = 100;   // Allow more time to drain queues
+        constexpr int MAX_EVENTS_PER_FRAME = 2048; // Process more events per callback to avoid packet loss
+        constexpr uint32_t ACQUIRE_TIMEOUT_US = 2000; // Wait up to 2ms for next event (avoid single try with timeout 0)
+        constexpr int MAX_CONSECUTIVE_TIMEOUTS = 25;  // Wait up to ~50ms for events, then yield to render
         auto processStart = std::chrono::steady_clock::now();
         int eventsProcessed = 0;
+        int consecutiveTimeouts = 0;
 
         while (eventsProcessed < MAX_EVENTS_PER_FRAME) {
             auto elapsed = std::chrono::steady_clock::now() - processStart;
@@ -426,14 +456,24 @@ public:
                 break;
 
             const dwSensorEvent* acquiredEvent = nullptr;
-            dwStatus status = dwSensorManager_acquireNextEvent(&acquiredEvent, 0, m_sensorManager);
+            dwStatus status = dwSensorManager_acquireNextEvent(&acquiredEvent, ACQUIRE_TIMEOUT_US, m_sensorManager);
 
-            if (status == DW_TIME_OUT)
-                break;
+            if (status == DW_TIME_OUT) {
+                if (++consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS)
+                    break; // Yield to render after waiting ~50ms
+                continue;
+            }
+            consecutiveTimeouts = 0;
             if (status != DW_SUCCESS) {
                 if (status == DW_END_OF_STREAM)
                     std::cout << "[DWFastLIO] Sensor manager end of stream" << std::endl;
                 break;
+            }
+
+            static bool loggedFirstEvent = false;
+            if (!loggedFirstEvent) {
+                std::cout << "[DWFastLIO] First sensor event received (type=" << acquiredEvent->type << ")" << std::endl;
+                loggedFirstEvent = true;
             }
 
             switch (acquiredEvent->type) {
@@ -472,6 +512,11 @@ public:
                     acquiredEvent = nullptr;
 
                     if (isScanComplete && m_pointCloudSize > 0 && m_slam && m_pointCloudBuffer) {
+                        static bool loggedFirstScan = false;
+                        if (!loggedFirstScan) {
+                            std::cout << "[DWFastLIO] First LiDAR scan fed to SLAM (" << m_pointCloudSize << " points)" << std::endl;
+                            loggedFirstScan = true;
+                        }
                         try {
                             m_slam->feedLiDAR(m_pointCloudBuffer.get(), m_pointCloudSize, packetTimestamp);
                         } catch (const std::exception& e) {
@@ -562,6 +607,12 @@ public:
         dwRenderEngine_setTile(0, m_renderEngine);
         dwRenderEngine_setModelView(getMouseView().getModelView(), m_renderEngine);
         dwRenderEngine_setProjection(getMouseView().getProjection(), m_renderEngine);
+        
+        // Render ground grid in light gray
+        if (m_gridBuffer != 0 && m_gridBufferPrimitiveCount > 0) {
+            dwRenderEngine_setColor({0.3f, 0.3f, 0.3f, 1.0f}, m_renderEngine);
+            dwRenderEngine_renderBuffer(m_gridBuffer, m_gridBufferPrimitiveCount, m_renderEngine);
+        }
         
         // Get pose once (thread-safe, fast)
         Eigen::Matrix4d pose = Eigen::Matrix4d::Identity(); // Default identity
@@ -704,6 +755,9 @@ public:
             std::string path = m_slam->hasKeyframesToSave() ? base : (base + ".pcd");
             if (m_slam->saveMap(path)) {
                 m_statusMessage = "Map saved: " + path;
+            } else {
+                m_statusMessage = "No map to save (drive in MAPPING mode to build map first)";
+                std::cout << "[dw_fastlio] Save failed: no map data. Build map by driving in MAPPING mode, then press S." << std::endl;
             }
         }
         else if (key == GLFW_KEY_L) {
@@ -762,6 +816,11 @@ public:
         m_slam.reset();
         
         // 3) Release buffers (invalidate handles so late onRender is a no-op)
+        if (m_gridBuffer != 0 && m_renderEngine != DW_NULL_HANDLE) {
+            dwRenderEngine_destroyBuffer(m_gridBuffer, m_renderEngine);
+            m_gridBuffer = 0;
+            m_gridBufferPrimitiveCount = 0;
+        }
         if (m_mapBuffer != 0 && m_renderEngine != DW_NULL_HANDLE) {
             dwRenderEngine_destroyBuffer(m_mapBuffer, m_renderEngine);
             m_mapBuffer = 0;

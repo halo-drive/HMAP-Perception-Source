@@ -341,6 +341,18 @@ void SygnalPomoParser::getCurrentState(
         if (buffer.lastSteeringUpdate > 0) {
             safetyState->timestamp_us = buffer.lastSteeringUpdate;
         }
+
+        // Initialize all validity fields to "never received"
+        memset(&safetyState->validityInfo, 0, sizeof(safetyState->validityInfo));
+
+        // Mark steeringWheelAngle as valid if we have a steering update
+        if (buffer.hasSteering && safetyState->timestamp_us > 0) {
+            dwSignal_encodeSignalValidity(
+                &safetyState->validityInfo.steeringWheelAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
     }
     
     // ===========================================
@@ -368,7 +380,44 @@ void SygnalPomoParser::getCurrentState(
             nonSafetyState->wheelTicksTimestamp[i] = buffer.lastWheelSpeedUpdate;
         }
         
-        // Set quality enums
+        // Initialize all validity fields to "never received"
+        memset(&nonSafetyState->validityInfo, 0, sizeof(nonSafetyState->validityInfo));
+
+        // Mark speedESC valid if we have a recent speed update
+        if (buffer.hasSpeed && buffer.lastSpeedUpdate > 0) {
+            dwSignal_encodeSignalValidity(
+                &nonSafetyState->validityInfo.speedESC,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark frontSteeringAngle valid if we have a recent steering update
+        if (buffer.hasSteering && buffer.lastSteeringUpdate > 0) {
+            dwSignal_encodeSignalValidity(
+                &nonSafetyState->validityInfo.frontSteeringAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark wheelSpeed/ wheelTicks for each wheel valid if we have wheel speeds
+        if (buffer.hasWheelSpeeds && buffer.lastWheelSpeedUpdate > 0) {
+            for (int i = 0; i < 4; ++i) {
+                dwSignal_encodeSignalValidity(
+                    &nonSafetyState->validityInfo.wheelSpeed[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+                dwSignal_encodeSignalValidity(
+                    &nonSafetyState->validityInfo.wheelTicksTimestamp[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+            }
+        }
+
+        // Set quality enums (unchanged)
         nonSafetyState->speedQualityESC = DW_VIO_SPEED_QUALITY_E_S_C_SIG_DEF;
         nonSafetyState->frontSteeringAngleQuality = DW_VIO_FRONT_STEERING_ANGLE_QUALITY_INIT;
         
@@ -563,8 +612,50 @@ bool SygnalPomoParser::getTemporallySynchronizedState(
         // Copy vehicle stopped status
         actuationFeedback->vehicleStopped = nonSafetyState->vehicleStopped;
         
-        //  Clear validity flags (different struct type, can't copy from nonSafety)
+        // Initialize validity flags for actuation feedback
         memset(&actuationFeedback->validityInfo, 0, sizeof(actuationFeedback->validityInfo));
+
+        // Mark speedESC valid if we have speed
+        if (nonSafetyState->speedESCTimestamp > 0) {
+            dwSignal_encodeSignalValidity(
+                &actuationFeedback->validityInfo.speedESC,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark steering signals valid if we have steering
+        if (nonSafetyState->frontSteeringTimestamp > 0) {
+            dwSignal_encodeSignalValidity(
+                &actuationFeedback->validityInfo.steeringWheelAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+            dwSignal_encodeSignalValidity(
+                &actuationFeedback->validityInfo.frontSteeringAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark wheel speeds valid if we have wheel speed timestamps
+        if (nonSafetyState->wheelTicksTimestamp[0] > 0 ||
+            nonSafetyState->wheelTicksTimestamp[1] > 0 ||
+            nonSafetyState->wheelTicksTimestamp[2] > 0 ||
+            nonSafetyState->wheelTicksTimestamp[3] > 0) {
+            for (int i = 0; i < 4; ++i) {
+                dwSignal_encodeSignalValidity(
+                    &actuationFeedback->validityInfo.wheelSpeed[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+                dwSignal_encodeSignalValidity(
+                    &actuationFeedback->validityInfo.wheelTicksTimestamp[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+            }
+        }
         
         //  Set sequence ID
         actuationFeedback->sequenceId = sequenceId;

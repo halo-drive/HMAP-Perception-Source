@@ -16,6 +16,7 @@
 #include <dw/sensors/common/Sensors.h>
 #include <dw/rig/Rig.h>
 #include <dw/egomotion/base/Egomotion.h>
+#include <dw/core/signal/SignalStatus.h>
 #include <framework/Log.hpp>
 
 #include <memory>

@@ -256,9 +256,32 @@ private:
         // =========================================================
         m_currentGPSFrame = gpsFrame;
         m_trajectoryLog.addWGS84("GPS", gpsFrame);
-        
+
+        // Detailed GPS logging comparable to sensors/egomotion/main.cpp
+        log("\n=== GPS FRAME (POMO) ===\n");
+        log("  Timestamp: %lu us (%.6f s)\n", gpsFrame.timestamp_us, gpsFrame.timestamp_us * 1e-6);
+        log("  Position:\n");
+        log("    Latitude: %.8f deg\n", gpsFrame.latitude);
+        log("    Longitude: %.8f deg\n", gpsFrame.longitude);
+        log("    Altitude: %.3f m\n", gpsFrame.altitude);
+        log("  Velocity:\n");
+        log("    Horizontal speed: %.6f m/s\n", gpsFrame.speed);
+        log("    Vertical speed (climb): %.6f m/s\n", gpsFrame.climb);
+        log("  Course: %.2f deg\n", gpsFrame.course);
+        log("  Accuracy:\n");
+        log("    hacc: %.3f m\n", gpsFrame.hacc);
+        log("    vacc: %.3f m\n", gpsFrame.vacc);
+        log("  Dilution of Precision:\n");
+        log("    HDOP: %.3f\n", gpsFrame.hdop);
+        log("    VDOP: %.3f\n", gpsFrame.vdop);
+        log("    PDOP: %.3f\n", gpsFrame.pdop);
+        log("  Satellite Count: %u\n", gpsFrame.satelliteCount);
+        log("  Fix Status: %d\n", gpsFrame.fixStatus);
+        log("  Mode: %d\n", gpsFrame.mode);
+        log("  UTC Time: %lu us\n", gpsFrame.utcTimeUs);
+
         dwStatus gpsStatus = dwGlobalEgomotion_addGPSMeasurement(&gpsFrame, m_globalEgomotion);
-        fprintf(stderr, " [FUSION] GPS feed status: %s\n", dwGetStatusName(gpsStatus));
+        log("  dwGlobalEgomotion_addGPSMeasurement status: %s\n", dwGetStatusName(gpsStatus));
         
         // Mark GPS as processed
         m_temporalBuffers.lastProcessedGPS = anchorTimestamp;
@@ -417,6 +440,20 @@ private:
                     if (acquiredEvent->sensorIndex != m_vehicleSensorIdx)
                         break;
                     
+                    // VERIFICATION: Compare CAN timestamp with context time to verify PTP sync
+                    static int canFrameCount = 0;
+                    if (canFrameCount++ < 5) {  // Log first 5 frames
+                        dwTime_t contextTime = 0;
+                        dwContext_getCurrentTime(&contextTime, m_context);
+                        int64_t timeDiff = static_cast<int64_t>(acquiredEvent->canFrame.timestamp_us) - contextTime;
+                        printf("[PTP VERIFY] CAN frame #%d: CAN_ts=%lld, Context_ts=%lld, diff=%lld us\n",
+                               canFrameCount, 
+                               static_cast<long long>(acquiredEvent->canFrame.timestamp_us),
+                               static_cast<long long>(contextTime),
+                               static_cast<long long>(timeDiff));
+                        fflush(stdout);
+                    }
+                    
                     m_canParser->processCANFrame(acquiredEvent->canFrame);
                     
                     dwVehicleIOSafetyState safetyState{};
@@ -425,8 +462,77 @@ private:
                     
                     m_canParser->getCurrentState(&safetyState, &nonSafetyState, &actuationFeedback);
                     
-                    // CRITICAL: Check return status!
+                    // ------------------------------------------------------------------
+                    // FEED VEHICLE STATE INTO EGOMOTION (detailed logging, comparable
+                    // to sensors/egomotion/main.cpp for side‑by‑side debugging)
+                    // ------------------------------------------------------------------
+                    {
+                        const dwCANMessage& frame = acquiredEvent->canFrame;
+                        log("\n=== VEHICLE DATA (POMO CAN) ===\n");
+                        log("  CAN Frame:\n");
+                        log("    ID: 0x%X\n", frame.id);
+                        log("    DLC: %u\n", frame.size);
+                        log("    Timestamp: %lu us (%.6f s)\n",
+                            frame.timestamp_us,
+                            frame.timestamp_us * 1e-6);
+                        log("    Data: ");
+                        for (uint32_t i = 0; i < frame.size && i < 8; i++)
+                        {
+                            log("%02X ", frame.data[i]);
+                        }
+                        log("\n");
+
+                        log("  SafetyState:\n");
+                        log("    size: %u\n", safetyState.size);
+                        log("    steeringWheelAngle: %.6f rad (%.2f deg)\n",
+                            safetyState.steeringWheelAngle,
+                            RAD2DEG(safetyState.steeringWheelAngle));
+                        log("    timestamp_us: %lu\n", safetyState.timestamp_us);
+                        log("    sequenceId: %u\n", safetyState.sequenceId);
+
+                        log("  NonSafetyState:\n");
+                        log("    size: %u\n", nonSafetyState.size);
+                        log("    speedESC: %.6f m/s (%.2f km/h)\n",
+                            nonSafetyState.speedESC,
+                            nonSafetyState.speedESC * 3.6f);
+                        log("    speedDirectionESC: %d\n", nonSafetyState.speedDirectionESC);
+                        log("    speedESCTimestamp: %lu\n", nonSafetyState.speedESCTimestamp);
+                        log("    frontSteeringAngle: %.6f rad (%.2f deg)\n",
+                            nonSafetyState.frontSteeringAngle,
+                            RAD2DEG(nonSafetyState.frontSteeringAngle));
+                        log("    frontSteeringTimestamp: %lu\n", nonSafetyState.frontSteeringTimestamp);
+                        log("    wheelSpeed (angular) [rad/s]:\n");
+                        log("      FL: %.6f\n", nonSafetyState.wheelSpeed[0]);
+                        log("      FR: %.6f\n", nonSafetyState.wheelSpeed[1]);
+                        log("      RL: %.6f\n", nonSafetyState.wheelSpeed[2]);
+                        log("      RR: %.6f\n", nonSafetyState.wheelSpeed[3]);
+                        log("    wheelTicksTimestamp:\n");
+                        log("      FL: %lu\n", nonSafetyState.wheelTicksTimestamp[0]);
+                        log("      FR: %lu\n", nonSafetyState.wheelTicksTimestamp[1]);
+                        log("      RL: %lu\n", nonSafetyState.wheelTicksTimestamp[2]);
+                        log("      RR: %lu\n", nonSafetyState.wheelTicksTimestamp[3]);
+                        log("    drivePositionStatus: %d\n", nonSafetyState.drivePositionStatus);
+                        log("    vehicleStopped: %d\n", nonSafetyState.vehicleStopped);
+
+                        log("  ActuationFeedback:\n");
+                        log("    size: %u\n", actuationFeedback.size);
+                        log("    speedESC: %.6f m/s (%.2f km/h)\n",
+                            actuationFeedback.speedESC,
+                            actuationFeedback.speedESC * 3.6f);
+                        log("    speedDirectionESC: %d\n", actuationFeedback.speedDirectionESC);
+                        log("    steeringWheelAngle: %.6f rad (%.2f deg)\n",
+                            actuationFeedback.steeringWheelAngle,
+                            RAD2DEG(actuationFeedback.steeringWheelAngle));
+                        log("    frontSteeringAngle: %.6f rad (%.2f deg)\n",
+                            actuationFeedback.frontSteeringAngle,
+                            RAD2DEG(actuationFeedback.frontSteeringAngle));
+                        log("    timestamp_us: %lu\n", actuationFeedback.timestamp_us);
+                        log("    sequenceId: %u\n", actuationFeedback.sequenceId);
+                    }
+
+                    // CRITICAL: Check return status
                     dwStatus vioStatus = dwEgomotion_addVehicleIOState(&safetyState, &nonSafetyState, &actuationFeedback, m_egomotion);
+                    log("  dwEgomotion_addVehicleIOState status: %s\n", dwGetStatusName(vioStatus));
                     
                     // Log EVERY failure, but successes only once per second
                     static dwTime_t lastSuccessLog = 0;
@@ -462,21 +568,44 @@ private:
                     
                     const dwIMUFrame& imu = acquiredEvent->imuFrame;
                     
-                    // DIAGNOSTIC: Log IMU data being fed
+                    // Detailed IMU logging comparable to sensors/egomotion/main.cpp
                     static uint32_t imuFedCount = 0;
-                    if (++imuFedCount % 100 == 1) {  // Every 100th frame
+                    ++imuFedCount;
+                    {
                         float accelMag = std::sqrt(imu.acceleration[0]*imu.acceleration[0] +
-                                                imu.acceleration[1]*imu.acceleration[1] +
-                                                imu.acceleration[2]*imu.acceleration[2]);
-                        fprintf(stderr, "📡 IMU #%u: accel=[%.2f,%.2f,%.2f] mag=%.2f, gyro=[%.3f,%.3f,%.3f], ts=%lu\n",
-                                imuFedCount,
-                                imu.acceleration[0], imu.acceleration[1], imu.acceleration[2], accelMag,
-                                imu.turnrate[0], imu.turnrate[1], imu.turnrate[2],
-                                imu.timestamp_us);
+                                                   imu.acceleration[1]*imu.acceleration[1] +
+                                                   imu.acceleration[2]*imu.acceleration[2]);
+                        float gyroMag  = std::sqrt(imu.turnrate[0]*imu.turnrate[0] +
+                                                   imu.turnrate[1]*imu.turnrate[1] +
+                                                   imu.turnrate[2]*imu.turnrate[2]);
+                        log("\n=== IMU FRAME (POMO) ===\n");
+                        log("  Frame #%u\n", imuFedCount);
+                        log("  Timestamp: %lu us (%.6f s)\n", imu.timestamp_us, imu.timestamp_us * 1e-6);
+                        log("  Acceleration [m/s^2]:\n");
+                        log("    x: %.6f\n", imu.acceleration[0]);
+                        log("    y: %.6f\n", imu.acceleration[1]);
+                        log("    z: %.6f\n", imu.acceleration[2]);
+                        log("    |a|: %.6f\n", accelMag);
+                        log("  Turnrate [rad/s]:\n");
+                        log("    x: %.6f (%.2f deg/s)\n", imu.turnrate[0], RAD2DEG(imu.turnrate[0]));
+                        log("    y: %.6f (%.2f deg/s)\n", imu.turnrate[1], RAD2DEG(imu.turnrate[1]));
+                        log("    z: %.6f (%.2f deg/s)\n", imu.turnrate[2], RAD2DEG(imu.turnrate[2]));
+                        log("    |w|: %.6f (%.2f deg/s)\n", gyroMag, RAD2DEG(gyroMag));
+                        log("  Magnetometer [utesla]:\n");
+                        log("    x: %.6f\n", imu.magnetometer[0]);
+                        log("    y: %.6f\n", imu.magnetometer[1]);
+                        log("    z: %.6f\n", imu.magnetometer[2]);
+                        log("  Orientation (RPY) [deg]:\n");
+                        log("    roll: %.2f\n", imu.orientation[0]);
+                        log("    pitch: %.2f\n", imu.orientation[1]);
+                        log("    yaw: %.2f\n", imu.orientation[2]);
+                        log("  Heading: %.2f deg\n", imu.heading);
+                        log("============================\n");
                     }
-                    
+
                     if (m_egomotionParameters.motionModel != DW_EGOMOTION_ODOMETRY) {
-                        dwEgomotion_addIMUMeasurement(&imu, m_egomotion);
+                        dwStatus imuStatus = dwEgomotion_addIMUMeasurement(&imu, m_egomotion);
+                        log("  dwEgomotion_addIMUMeasurement status: %s\n", dwGetStatusName(imuStatus));
                     }
                     
                     m_currentIMUFrame = imu;
@@ -637,6 +766,41 @@ public:
         {
             initializeDriveWorks(m_context);
             CHECK_DW_ERROR(dwVisualizationInitialize(&m_vizCtx, m_context));
+            
+            // Check PTP synchronization status
+            {
+                printf("[PTP DEBUG] About to check PTP synchronization status...\n");
+                fflush(stdout);
+                
+                bool isPTPSynchronized = false;
+                dwStatus ptpStatus = dwContext_isTimePTPSynchronized(&isPTPSynchronized, m_context);
+                
+                printf("[PTP DEBUG] dwContext_isTimePTPSynchronized returned status: %s (code: %d)\n", 
+                       dwGetStatusName(ptpStatus), ptpStatus);
+                printf("[PTP DEBUG] isPTPSynchronized flag value: %s\n", isPTPSynchronized ? "true" : "false");
+                fflush(stdout);
+                
+                char buf[512];
+                if (ptpStatus == DW_SUCCESS) {
+                    if (isPTPSynchronized) {
+                        sprintf(buf, "[PTP SYNC] Context is PTP-synchronized - All sensors will use PTP timestamps\n");
+                        printColored(stdout, COLOR_GREEN, buf);
+                    } else {
+                        sprintf(buf, "[PTP SYNC] Context is NOT PTP-synchronized - Sensors will use system clock\n");
+                        printColored(stdout, COLOR_YELLOW, buf);
+                        sprintf(buf, "[PTP SYNC] Note: PTP sync requires PTP daemon to be running during context creation\n");
+                        printColored(stdout, COLOR_YELLOW, buf);
+                    }
+                } else if (ptpStatus == DW_NOT_SUPPORTED) {
+                    sprintf(buf, "[PTP SYNC] PTP synchronization not supported on this platform\n");
+                    printColored(stdout, COLOR_YELLOW, buf);
+                } else {
+                    sprintf(buf, "[PTP SYNC] Failed to check PTP sync status: %s (code: %d)\n", 
+                            dwGetStatusName(ptpStatus), ptpStatus);
+                    printColored(stdout, COLOR_YELLOW, buf);
+                }
+                fflush(stdout);
+            }
         }
 
         // Read Rig file to extract vehicle properties
@@ -1579,21 +1743,79 @@ public:
         // =====================================================
         dwEgomotionResult estimate{};
         dwEgomotionUncertainty uncertainty{};
-        
-        if (dwEgomotion_getEstimation(&estimate, m_egomotion) != DW_SUCCESS) {
+        dwStatus estStatus = dwEgomotion_getEstimation(&estimate, m_egomotion);
+        dwStatus uncStatus = dwEgomotion_getUncertainty(&uncertainty, m_egomotion);
+
+        log("\n=== Egomotion Query (POMO) ===\n");
+        log("  dwEgomotion_getEstimation status: %s\n", dwGetStatusName(estStatus));
+        log("  dwEgomotion_getUncertainty status: %s\n", dwGetStatusName(uncStatus));
+
+        if (estStatus != DW_SUCCESS || uncStatus != DW_SUCCESS) {
+            log("  Egomotion estimation or uncertainty not available\n");
             return;  // No valid estimate yet
         }
-        
-        dwEgomotion_getUncertainty(&uncertainty, m_egomotion);
+
+        log("  EgomotionResult:\n");
+        log("    Timestamp: %lu us (%.6f s)\n", estimate.timestamp, estimate.timestamp * 1e-6);
+        log("    ValidFlags: 0x%08X\n", estimate.validFlags);
+
+        {
+            float32_t roll, pitch, yaw;
+            quaternionToEulerAngles(estimate.rotation, roll, pitch, yaw);
+            log("    Rotation (Quaternion): w=%.6f, x=%.6f, y=%.6f, z=%.6f\n",
+                estimate.rotation.w, estimate.rotation.x,
+                estimate.rotation.y, estimate.rotation.z);
+            log("    Rotation (Euler) [deg]: roll=%.2f, pitch=%.2f, yaw=%.2f\n",
+                RAD2DEG(roll), RAD2DEG(pitch), RAD2DEG(yaw));
+        }
+
+        log("    Linear Velocity [m/s]: x=%.6f, y=%.6f, z=%.6f\n",
+            estimate.linearVelocity[0],
+            estimate.linearVelocity[1],
+            estimate.linearVelocity[2]);
+        log("    Linear Acceleration [m/s^2]: x=%.6f, y=%.6f, z=%.6f\n",
+            estimate.linearAcceleration[0],
+            estimate.linearAcceleration[1],
+            estimate.linearAcceleration[2]);
+        log("    Angular Velocity [rad/s]: x=%.6f (%.2f deg/s), y=%.6f (%.2f deg/s), z=%.6f (%.2f deg/s)\n",
+            estimate.angularVelocity[0], RAD2DEG(estimate.angularVelocity[0]),
+            estimate.angularVelocity[1], RAD2DEG(estimate.angularVelocity[1]),
+            estimate.angularVelocity[2], RAD2DEG(estimate.angularVelocity[2]));
+
+        log("  EgomotionUncertainty:\n");
+        log("    ValidFlags: 0x%llX\n", static_cast<long long>(uncertainty.validFlags));
+        log("    Rotation covariance diag [rad^2]: roll=%.6e, pitch=%.6e, yaw=%.6e\n",
+            uncertainty.rotation.array[0],
+            uncertainty.rotation.array[3 + 1],
+            uncertainty.rotation.array[6 + 2]);
+        log("    Linear Velocity StdDev [m/s]: x=%.6e, y=%.6e, z=%.6e\n",
+            uncertainty.linearVelocity[0],
+            uncertainty.linearVelocity[1],
+            uncertainty.linearVelocity[2]);
+        log("    Angular Velocity StdDev [rad/s]: x=%.6e, y=%.6e, z=%.6e\n",
+            uncertainty.angularVelocity[0],
+            uncertainty.angularVelocity[1],
+            uncertainty.angularVelocity[2]);
+        log("    Linear Acceleration StdDev [m/s^2]: x=%.6e, y=%.6e, z=%.6e\n",
+            uncertainty.linearAcceleration[0],
+            uncertainty.linearAcceleration[1],
+            uncertainty.linearAcceleration[2]);
         
         // =====================================================
         // FEED TO GLOBAL EGOMOTION
         // =====================================================
-        dwGlobalEgomotion_addRelativeMotion(&estimate, &uncertainty, m_globalEgomotion);
+        dwStatus globalStatus = dwGlobalEgomotion_addRelativeMotion(&estimate, &uncertainty, m_globalEgomotion);
+        log("  dwGlobalEgomotion_addRelativeMotion status: %s\n", dwGetStatusName(globalStatus));
         
         // =====================================================
         // SAMPLE POSE AT CONFIGURED RATE
         // =====================================================
+        // Initialize last sample timestamp on first valid estimate
+        if (m_lastSampleTimestamp == 0) {
+            m_lastSampleTimestamp = estimate.timestamp;
+            return; // need at least two timestamps to form a relative transform
+        }
+
         if (estimate.timestamp < m_lastSampleTimestamp + POSE_SAMPLE_PERIOD) {
             return;  // Too soon to sample
         }
@@ -1602,8 +1824,16 @@ public:
         dwTransformation3f rigLast2rigNow{};
         dwStatus transStatus = dwEgomotion_computeRelativeTransformation(
             &rigLast2rigNow, nullptr, m_lastSampleTimestamp, estimate.timestamp, m_egomotion);
+        log("  dwEgomotion_computeRelativeTransformation status: %s\n", dwGetStatusName(transStatus));
+        log("    From timestamp: %lu us\n", m_lastSampleTimestamp);
+        log("    To timestamp:   %lu us\n", estimate.timestamp);
         
         if (transStatus != DW_SUCCESS) {
+            // History for m_lastSampleTimestamp is no longer available (e.g. too old).
+            // Reset base timestamp so future requests stay within egomotion history.
+            log("  Relative transform not available for [%lu -> %lu], resetting m_lastSampleTimestamp\n",
+                m_lastSampleTimestamp, estimate.timestamp);
+            m_lastSampleTimestamp = estimate.timestamp;
             return;
         }
         
@@ -1624,6 +1854,20 @@ public:
         // Compute absolute pose
         dwTransformation3f rigNow2World{};
         dwEgomotion_applyRelativeTransformation(&rigNow2World, &rigLast2rigNow, &rigLast2world);
+
+        log("  Absolute Pose (rigNow2World) matrix:\n");
+        for (int i = 0; i < 4; ++i)
+        {
+            log("    [%.6f, %.6f, %.6f, %.6f]\n",
+                rigNow2World.array[i + 0*4],
+                rigNow2World.array[i + 1*4],
+                rigNow2World.array[i + 2*4],
+                rigNow2World.array[i + 3*4]);
+        }
+        log("  Translation: [%.6f, %.6f, %.6f]\n",
+            rigNow2World.array[0 + 3*4],
+            rigNow2World.array[1 + 3*4],
+            rigNow2World.array[2 + 3*4]);
         
         pose.rig2world = rigNow2World;
         pose.timestamp = estimate.timestamp;
