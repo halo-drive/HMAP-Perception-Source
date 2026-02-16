@@ -29,6 +29,33 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/transforms.h>
 
+// Motion compensation: undistort scan using delta pose over scan period (same model as LSD slam_utils)
+namespace {
+void undistortScan(pcl::PointCloud<pcl::PointXYZI>& cloud, const Eigen::Matrix4d& odom_start, const Eigen::Matrix4d& odom_end, double scan_period) {
+    Eigen::Matrix4d delta = (Eigen::Isometry3d(odom_start).inverse() * Eigen::Isometry3d(odom_end)).matrix();
+    Eigen::Vector3f delta_translation = delta.block<3, 1>(0, 3).cast<float>();
+    Eigen::Quaternionf delta_rotation(delta.block<3, 3>(0, 0).cast<float>());
+    Eigen::AngleAxisf angle_axis(delta_rotation);
+    const size_t n = cloud.size();
+    if (n == 0 || scan_period <= 0) return;
+    for (size_t i = 0; i < n; i++) {
+        double t_ratio = (n <= 1) ? 0.0 : (double)i / (double)(n - 1);
+        Eigen::Matrix<float, 6, 1> log_vec = (float)t_ratio * (Eigen::Matrix<float, 6, 1>() << delta_translation, angle_axis.angle() * angle_axis.axis()).finished();
+        Eigen::Affine3f T = Eigen::Affine3f::Identity();
+        const float norm = log_vec.tail<3>().norm();
+        if (norm < 1e-8f) {
+            T.translation() = log_vec.head<3>();
+        } else {
+            T.translation() = log_vec.head<3>();
+            T.linear() = Eigen::AngleAxisf(norm, log_vec.tail<3>() / norm).toRotationMatrix();
+        }
+        Eigen::Vector3f p(cloud.points[i].x, cloud.points[i].y, cloud.points[i].z);
+        p = T * p;
+        cloud.points[i].x = p(0); cloud.points[i].y = p(1); cloud.points[i].z = p(2);
+    }
+}
+}
+
 // FastLIO API from LSD (C++ linkage)
 extern int  fastlio_init(std::vector<double> &extT, std::vector<double>& extR,
                          int filter_num, int max_point_num, double scan_period, bool undistort);
@@ -506,8 +533,8 @@ __attribute__((noinline)) void DWFastLIO::feedLiDAR(const dwLidarPointXYZI* poin
         }
         lidar_buffer_.push_back({pclCloud, timestamp});
         
-        // Aggressively limit buffer size - only keep last 3 scans
-        while (lidar_buffer_.size() > 3) {
+        // Limit buffer size so one put-back (when waiting for IMU/sync) is not dropped before retry
+        while (lidar_buffer_.size() > 10) {
             lidar_buffer_.pop_front();
         }
         buffer_size = lidar_buffer_.size();
@@ -526,6 +553,7 @@ void DWFastLIO::processScan() {
     int failed_count = 0;
     int empty_buffer_count = 0;
     
+    static int scanSkipCounter = 0;
     while (thread_running_) {
         pcl::PointCloud<pcl::PointXYZI>::Ptr cloud;
         dwTime_t timestamp;
@@ -562,21 +590,10 @@ void DWFastLIO::processScan() {
                 continue;
             }
             
-            // Frame skipping: only process every 5th scan for 5-6 FPS operation
-            static int scanSkipCounter = 0;
+            // Process every scan (Fast-LIO approach); no frame skipping
             scanSkipCounter++;
             
-            if (scanSkipCounter % 5 != 0) {
-                // Skip this scan - remove it from buffer
-                lidar_buffer_.pop_front();
-                if (scanSkipCounter <= 10) {
-                    std::cout << "[DWFastLIO] Skipping scan #" << scanSkipCounter 
-                              << " (processing every 5th scan)" << std::endl;
-                }
-                continue;
-            }
-            
-            // Process this scan
+            // Take the scan we will process (only when we pass IMU + time-sync below do we actually process)
             auto scan = lidar_buffer_.front();
             lidar_buffer_.pop_front();
             cloud = scan.first;
@@ -596,31 +613,59 @@ void DWFastLIO::processScan() {
         }
         
         if (!hasIMU) {
-            // Log first few times to diagnose - this is likely the issue!
             static int imu_wait_count = 0;
             imu_wait_count++;
-            // Always log first 20 waits to see what's happening
             if (imu_wait_count <= 20 || imu_wait_count % 50 == 0) {
                 size_t lidar_buf_size = 0;
-                {
-                    std::lock_guard<std::mutex> lock(lidar_mutex_);
-                    lidar_buf_size = lidar_buffer_.size();
-                }
-                std::cout << "[DWFastLIO] WAITING FOR IMU DATA (wait #" << imu_wait_count 
-                          << ", lidar buffer: " << lidar_buf_size 
-                          << ", imu buffer: " << imu_buffer_size << ")" << std::endl;
+                { std::lock_guard<std::mutex> lock(lidar_mutex_); lidar_buf_size = lidar_buffer_.size(); }
+                std::cout << "[DWFastLIO] WAITING FOR IMU DATA (wait #" << imu_wait_count
+                          << ", lidar buffer: " << lidar_buf_size << ", imu buffer: " << imu_buffer_size << ")" << std::endl;
             }
-            // Put scan back if no IMU
-            {
-                std::lock_guard<std::mutex> lock(lidar_mutex_);
-                lidar_buffer_.push_front({cloud, timestamp});
-            }
+            { std::lock_guard<std::mutex> lock(lidar_mutex_); lidar_buffer_.push_front({cloud, timestamp}); }
+            scanSkipCounter--;  // so next iteration we retry this scan (same “every 5th” slot)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
         }
+
+        // IMU–LiDAR time sync: require IMU to have reached at least scan start (so we have IMU for the scan interval).
+        // Using scan start (not scan end) avoids getting stuck when IMU clock is slightly behind lidar.
+        const double scan_time_sec = static_cast<double>(cloud->header.stamp) / 1e6;
+        const double scan_end_sec = scan_time_sec + config_.scan_period;
+        double imu_min_sec = 0, imu_max_sec = 0;
+        {
+            std::lock_guard<std::mutex> lock(imu_mutex_);
+            if (!imu_buffer_.empty()) {
+                imu_min_sec = imu_buffer_.front().first.stamp;
+                imu_max_sec = imu_buffer_.back().first.stamp;
+            }
+        }
+        if (!imu_buffer_.empty()) {
+            if (imu_max_sec < scan_time_sec - 0.02) {
+                // IMU hasn't reached scan start yet; put scan back and wait
+                { std::lock_guard<std::mutex> lock(lidar_mutex_); lidar_buffer_.push_front({cloud, timestamp}); }
+                scanSkipCounter--;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            // Only drop as "late" when both are in relative time (imu_max_sec in seconds since start).
+            // At startup IMU can have absolute timestamps (1e6+ s) so imu_max_sec - scan_end_sec would
+            // be huge and we'd incorrectly drop every scan; skip late-drop when imu is clearly absolute.
+            if (imu_max_sec < 1e5 && imu_max_sec - scan_end_sec > 0.5) {
+                // Scan is way behind (e.g. after a gap); drop to avoid processing very late data
+                static int late_drop_count = 0;
+                if (++late_drop_count <= 5 || late_drop_count % 20 == 0) {
+                    std::cout << "[DWFastLIO] [PROCESS] Dropping late scan (gap " << (imu_max_sec - scan_end_sec)
+                              << " s, imu_range=[" << imu_min_sec << "," << imu_max_sec
+                              << "], scan_time=" << scan_time_sec << "), drop #" << late_drop_count << std::endl;
+                }
+                continue;
+            }
+        }
         
         std::cout << "[DWFastLIO] [PROCESS] IMU available (" << imu_buffer_size 
-                  << " samples), processing scan with " << cloud->size() << " points..." << std::endl;
+                  << " samples), processing scan with " << cloud->size() << " points..."
+                  << " (scan_time=" << scan_time_sec << "s, imu_range=[" << imu_min_sec << "," << imu_max_sec << "])"
+                  << std::endl;
         
         // Global re-localization on request (e.g. 'R' key) when keyframe map is loaded
         if (!mapping_mode_ && request_reloc_ && global_reloc_ && global_reloc_->keyframeCount() > 0) {
@@ -819,8 +864,14 @@ void DWFastLIO::processScan() {
             Eigen::Matrix4d odom_end   = Eigen::Matrix4d::Identity();
             fastlio_odometry(odom_start, odom_end);
 
+            // Motion compensation: undistort scan in place so map and graph use corrected cloud
+            // (Fast-LIO already uses undistortion internally for odometry; we apply same model for map.)
+            if (config_.enable_undistort && cloud && cloud->size() > 0 && config_.scan_period > 0) {
+                undistortScan(*cloud, odom_start, odom_end, config_.scan_period);
+            }
+
 #ifdef DW_FASTLIO_USE_GRAPH_BACKEND
-            // Full pipeline: feed graph backend (frame + floor) and get pose from get_odom2map()
+            // Full pipeline: feed graph backend (frame + floor); pose for map/trajectory stays odom-only
             if (backend_initialized_) {
                 // Build frame like LSD Fast-LIO getPose: points->T = delta odom, frame.T = odom at scan start
                 cloudAttr->T = (Eigen::Isometry3d(odom_start).inverse() * Eigen::Isometry3d(odom_end)).matrix();
@@ -842,20 +893,18 @@ void DWFastLIO::processScan() {
             }
 #endif
 
-            // World/map pose: from graph when backend active, else pose_offset_ * odom
+            // World/map pose: use odom (pose_offset_ * odom) for map and trajectory so the frame
+            // is consistent. LSD returns get_odom2map()*odom from getPose(), but LSD does *not*
+            // accumulate every scan into one cloud with that pose: their graph's odom_local_map is
+            // built in odom frame (best_frame.T is odom). We accumulate every scan, so we must use
+            // odom for the map; otherwise when get_odom2map() changes at optimization, we'd place
+            // scans in different "map" frames and get a discontinuous map. Graph is still fed for
+            // loop closure; we just don't apply get_odom2map() to the live map/trajectory.
             Eigen::Matrix4d world_pose;
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 odom_pose_ = odom_end;
-#ifdef DW_FASTLIO_USE_GRAPH_BACKEND
-                if (backend_initialized_) {
-                    Eigen::Isometry3d odom2map = get_odom2map();
-                    world_pose = (odom2map * Eigen::Isometry3d(odom_pose_)).matrix();
-                } else
-#endif
-                {
-                    world_pose = pose_offset_ * odom_pose_;
-                }
+                world_pose = pose_offset_ * odom_pose_;
                 current_pose_ = world_pose;
                 trajectory_.push_back(current_pose_);
 

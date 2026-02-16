@@ -16,6 +16,7 @@
 #include <dw/sensors/common/Sensors.h>
 #include <dw/rig/Rig.h>
 #include <dw/egomotion/base/Egomotion.h>
+#include <dw/core/signal/SignalStatus.h>
 #include <framework/Log.hpp>
 
 #include <memory>
@@ -54,8 +55,8 @@ public:
         
         // Real-time processing parameters
         dwTime_t velocityLatencyCompensation_us = 20000; // 20ms
-        float32_t velocityFactor = 1.609344f;
-        dwTime_t temporalWindow_us = 25000;           // 25ms temporal coherency window
+        float32_t velocityFactor = 1.0f;
+        dwTime_t temporalWindow_us = 500000;           // 500ms temporal coherency window
         dwTime_t stateCommitInterval_us = 10000;      // 10ms state commit interval
     };
 
@@ -96,6 +97,16 @@ private:
         dwVehicleIONonSafetyState committedNonSafetyState{};
         dwTime_t committedStateTimestamp{0};
         std::atomic<bool> hasValidCommittedState{false};
+        
+
+        static constexpr uint32_t DW_VIO_SPEED_QUALITY_E_S_C_VALID = 1;
+        static constexpr uint32_t DW_VIO_WHEEL_SPEED_QUALITY_VALID = 1;
+        static constexpr uint32_t DW_VIO_FRONT_STEERING_ANGLE_QUALITY_VALID = 1;
+        static constexpr uint32_t DW_VIO_WHEEL_TICKS_DIRECTION_FORWARD = 1;
+        static constexpr uint32_t DW_VIO_WHEEL_TICKS_DIRECTION_BACKWARD = 2;
+        static constexpr uint32_t DW_VIO_WHEEL_TICKS_DIRECTION_STANDSTILL = 3;
+        static constexpr uint32_t DW_VIO_VEHICLE_STOPPED_STOPPED = 1;
+        static constexpr uint32_t DW_VIO_VEHICLE_STOPPED_MOVING = 2;
         
         // State assembly buffer (protected by stateMutex)
         struct StateBuffer {
@@ -139,27 +150,34 @@ private:
         }
         
         bool isTemporallyCoherent(dwTime_t referenceTime, dwTime_t temporalWindow, 
-                          bool requireWheelSpeeds = false) const {
-            std::lock_guard<std::mutex> lock(stateMutex);
+                  bool requireWheelSpeeds = false) const {
             
             bool baseCoherent = (referenceTime - stateBuffer.lastSpeedUpdate <= temporalWindow) &&
                             (referenceTime - stateBuffer.lastSteeringUpdate <= temporalWindow);
+            
+            
+            
             if (requireWheelSpeeds) {
-                return baseCoherent && 
+                
+                bool result = baseCoherent && 
                     (referenceTime - stateBuffer.lastWheelSpeedUpdate <= temporalWindow);
+
+                return result;
             }
+            
             return baseCoherent;
         }
 
+
+        
         bool isStateComplete() const {
-            std::lock_guard<std::mutex> lock(stateMutex);
-            return stateBuffer.hasSpeed && stateBuffer.hasSteering;
+            bool result = stateBuffer.hasSpeed && stateBuffer.hasSteering;
+            return result;
         }
     };
     
     // Configuration and core components
     VehicleCANConfiguration m_configuration;
-    dwEgomotionSpeedMeasurementType m_speedMeasurementType;
     std::unique_ptr<SynchronizedVehicleState> m_vehicleState;
     
     // Parser state management
@@ -172,7 +190,7 @@ private:
     
     // Timeout thresholds (microseconds)
     static constexpr dwTime_t DEFAULT_MESSAGE_TIMEOUT = 50000;     // 50ms
-    static constexpr dwTime_t DEFAULT_TEMPORAL_WINDOW = 25000;      // 25ms
+    static constexpr dwTime_t DEFAULT_TEMPORAL_WINDOW = 500000;      // 500ms
     
     // Maximum allowed values for validation
     static constexpr float32_t MAX_VEHICLE_SPEED = 100.0f;          // m/s
@@ -187,7 +205,6 @@ public:
     /// Initialization methods
     bool initializeFromRig(dwRigHandle_t rigConfig, const char* vehicleSensorName);
     bool loadVehicleConfiguration(const VehicleCANConfiguration& config);
-    void configureSpeedMeasurementType(dwEgomotionSpeedMeasurementType type);
     bool isInitialized() const { return m_isInitialized.load(); }
 
     /// Real-time CAN message processing
@@ -201,6 +218,9 @@ public:
     dwVehicleIONonSafetyState getNonSafetyState() const;
     bool hasValidState() const;
     
+    void getCurrentState(dwVehicleIOSafetyState* safety, 
+                     dwVehicleIONonSafetyState* nonSafety,
+                     dwVehicleIOActuationFeedback* actuation);
     /// Diagnostics and monitoring
     const ParserDiagnostics& getDiagnostics() const { return *m_diagnostics; }
     void resetDiagnostics();
