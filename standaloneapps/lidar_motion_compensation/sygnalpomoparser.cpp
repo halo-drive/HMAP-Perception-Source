@@ -6,6 +6,8 @@
 /////////////////////////////////////////////////////////////////////////////////////////
 
 #include "sygnalpomoparser.hpp"
+#include <dw/control/vehicleio/VehicleIO.h>
+#include <dw/core/base/Types.h>
 #include <framework/Log.hpp>
 #include <cstring>
 #include <algorithm>
@@ -32,7 +34,6 @@ static inline uint64_t dbcMotorolaU(const uint8_t *data, int startBit, int lengt
 
 
 SygnalPomoParser::SygnalPomoParser()
-    : m_speedMeasurementType(DW_EGOMOTION_REAR_SPEED)
 {
     initializeStructures();
     log("SygnalPomoParser: Real-time synchronized parser initialized\n");
@@ -102,19 +103,6 @@ bool SygnalPomoParser::initializeFromRig(dwRigHandle_t rigConfig, const char* ve
     return true;
 }
 
-void SygnalPomoParser::configureSpeedMeasurementType(dwEgomotionSpeedMeasurementType type)
-{
-    m_speedMeasurementType = type;
-    
-    const char* typeStr = "UNKNOWN";
-    switch(type) {
-        case DW_EGOMOTION_FRONT_SPEED: typeStr = "FRONT_SPEED"; break;
-        case DW_EGOMOTION_REAR_SPEED: typeStr = "REAR_SPEED"; break;
-        case DW_EGOMOTION_REAR_WHEEL_SPEED: typeStr = "REAR_WHEEL_SPEED"; break;
-    }
-    
-    log("SygnalPomoParser: Speed measurement type configured: %s\n", typeStr);
-}
 
 bool SygnalPomoParser::processCANFrame(const dwCANMessage& frame)
 {
@@ -134,27 +122,24 @@ bool SygnalPomoParser::processCANFrame(const dwCANMessage& frame)
     dwTime_t expected = 0;
     m_initializationTimestamp.compare_exchange_weak(expected, frame.timestamp_us);
 
+    
+
     bool messageProcessed = false;
 
     // Route message to appropriate processor
     switch (frame.id) {
         case 0x4F1:  // CLU11 - Speed
-            printColored(stdout, COLOR_YELLOW, " Processing CLU11 (Speed) message\n");
+            // printColored(stdout, COLOR_YELLOW, " Processing CLU11 (Speed) message\n");
             messageProcessed = processSpeedMessage(frame);
             break;
             
         case 688:  // SAS11 - Steering
-            printColored(stdout, COLOR_YELLOW, " Processing SAS11 (Steering) message\n");
+           // printColored(stdout, COLOR_YELLOW, " Processing SAS11 (Steering) message\n");
             messageProcessed = processSteeringMessage(frame);
             break;
             
         case 902:  // WHL_SPD11 - Wheel speeds
-            if (m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED) {
-                printColored(stdout, COLOR_YELLOW, " Processing WHL_SPD11 (Wheel Speed) message\n");
                 messageProcessed = processWheelSpeedMessage(frame);
-            } else {
-                messageProcessed = true; // Not needed but not an error
-            }
             break;
             
         case 273:  // TCU11 - Gear
@@ -186,11 +171,11 @@ bool SygnalPomoParser::processSpeedMessage(const dwCANMessage& frame)
     dwVioSpeedDirectionESC direction = extractSpeedDirection(frame.data, frame.size);
 
     char buffer[256];
-    sprintf(buffer, "  Speed extracted: %.2f m/s (%.1f km/h), Direction: %s\n", 
+    /* sprintf(buffer, "  Speed extracted: %.2f m/s (%.1f km/h), Direction: %s\n", 
             speed, speed * 3.6f, 
             (direction == DW_VIO_SPEED_DIRECTION_E_S_C_FORWARD) ? "FORWARD" : 
             (direction == DW_VIO_SPEED_DIRECTION_E_S_C_BACKWARD) ? "BACKWARD" : "UNKNOWN");
-    printColored(stdout, COLOR_GREEN, buffer);
+    printColored(stdout, COLOR_GREEN, buffer); */
     
     if (speed < 0.0f || speed > MAX_VEHICLE_SPEED) {
         return false;
@@ -203,12 +188,14 @@ bool SygnalPomoParser::processSpeedMessage(const dwCANMessage& frame)
         
         buffer.pendingNonSafety.speedESC = speed;
         buffer.pendingNonSafety.speedDirectionESC = direction;
+        buffer.pendingNonSafety.speedESCTimestamp = frame.timestamp_us;
         buffer.lastSpeedUpdate = frame.timestamp_us;
         buffer.hasSpeed = true;
         
         char logBuffer[256];
-        sprintf(logBuffer, "  State buffer updated: hasSpeed=true, timestamp=%lu\n", frame.timestamp_us);
-        printColored(stdout, COLOR_DEFAULT, logBuffer);
+        /* sprintf(logBuffer, "  State buffer updated: hasSpeed=true, timestamp=%lu\n", frame.timestamp_us);
+        printColored(stdout, COLOR_DEFAULT, logBuffer); */ 
+
     }
     
     m_diagnostics->speedMessagesReceived.fetch_add(1);
@@ -222,9 +209,9 @@ bool SygnalPomoParser::processSteeringMessage(const dwCANMessage& frame)
     float32_t steeringWheelAngle = extractSteeringWheelAngle(frame.data, frame.size);
     
     char buffer[256];
-    sprintf(buffer, "  Steering extracted: %.3f rad (%.1f°)\n", 
+    /* sprintf(buffer, "  Steering extracted: %.3f rad (%.1f°)\n", 
             steeringWheelAngle, steeringWheelAngle * 180.0f / M_PI);
-    printColored(stdout, COLOR_GREEN, buffer);
+    printColored(stdout, COLOR_GREEN, buffer); */ 
 
     if (std::abs(steeringWheelAngle) > MAX_STEERING_ANGLE) {
         return false;
@@ -236,19 +223,20 @@ bool SygnalPomoParser::processSteeringMessage(const dwCANMessage& frame)
         auto& buffer = m_vehicleState->stateBuffer;
         
         buffer.pendingSafety.steeringWheelAngle = steeringWheelAngle;
+        buffer.pendingSafety.timestamp_us = frame.timestamp_us;
         buffer.lastSteeringUpdate = frame.timestamp_us;
         buffer.hasSteering = true;
         
         char logBuffer[256];
-        sprintf(logBuffer, "  State buffer updated: hasSteering=true, timestamp=%lu\n", frame.timestamp_us);
-        printColored(stdout, COLOR_DEFAULT, logBuffer);
+        /* sprintf(logBuffer, "  State buffer updated: hasSteering=true, timestamp=%lu\n", frame.timestamp_us);
+        printColored(stdout, COLOR_DEFAULT, logBuffer); */ 
 
         // Derive front steering angle
         float32_t frontSteeringAngle = convertSteeringWheelToFrontWheelAngle(steeringWheelAngle);
         
-        sprintf(logBuffer, "  Front wheel angle: %.3f rad (%.1f°)\n", 
+      /*  sprintf(logBuffer, "  Front wheel angle: %.3f rad (%.1f°)\n", 
                 frontSteeringAngle, frontSteeringAngle * 180.0f / M_PI);
-        printColored(stdout, COLOR_GREEN, logBuffer);
+        printColored(stdout, COLOR_GREEN, logBuffer); */ 
 
         buffer.pendingNonSafety.frontSteeringAngle = frontSteeringAngle;
         buffer.pendingNonSafety.frontSteeringTimestamp = frame.timestamp_us;
@@ -260,49 +248,46 @@ bool SygnalPomoParser::processSteeringMessage(const dwCANMessage& frame)
     return true;
 }
 
+
 bool SygnalPomoParser::processWheelSpeedMessage(const dwCANMessage& frame)
 {
-    bool allWheelsValid = true;
-    char buffer[256];
+    const float MAX_REASONABLE_SPEED = 50.0f;  // 50 m/s = 180 km/h
+    int validWheelCount = 0;
     
-    // Thread-safe wheel speed update
-    {
-        std::lock_guard<std::mutex> lock(m_vehicleState->stateMutex);
-        auto& stateBuffer = m_vehicleState->stateBuffer;
+    std::lock_guard<std::mutex> lock(m_vehicleState->stateMutex);
+    auto& stateBuffer = m_vehicleState->stateBuffer;
+    
+    for (uint8_t wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
+        float32_t wheelSpeedLinear = extractWheelSpeed(frame.data, frame.size, wheelIndex);
         
-        // Extract all four wheel speeds from single CAN message
-        for (uint8_t wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
-            float32_t wheelSpeedLinear = extractWheelSpeed(frame.data, frame.size, wheelIndex);
-
-            const char* wheelNames[] = {"FL", "FR", "RL", "RR"};
-            sprintf(buffer, "  Wheel %s: %.2f m/s (%.1f km/h)\n", 
-                    wheelNames[wheelIndex], wheelSpeedLinear, wheelSpeedLinear * 3.6f);
-            printColored(stdout, COLOR_GREEN, buffer);
-            
-            if (std::abs(wheelSpeedLinear) > MAX_WHEEL_SPEED * m_configuration.wheelRadius[wheelIndex]) {
-                allWheelsValid = false;
-                continue;
-            }
-            
-            // Convert to angular velocity
-            float32_t wheelSpeedAngular = wheelSpeedLinear / m_configuration.wheelRadius[wheelIndex];
-            stateBuffer.pendingNonSafety.wheelSpeed[wheelIndex] = wheelSpeedAngular;
+        // Validate individual wheel
+        if (wheelSpeedLinear < 0.0f || wheelSpeedLinear > MAX_REASONABLE_SPEED) {
+            // Store zero for invalid wheel, but continue processing
+            stateBuffer.pendingNonSafety.wheelSpeed[wheelIndex] = 0.0f;
             stateBuffer.pendingNonSafety.wheelTicksTimestamp[wheelIndex] = frame.timestamp_us;
+            continue;
         }
         
-        if (allWheelsValid) {
-            stateBuffer.lastWheelSpeedUpdate = frame.timestamp_us;
-            stateBuffer.hasWheelSpeeds = true;
-        }
+        // Convert to angular velocity
+        float32_t wheelSpeedAngular = wheelSpeedLinear / m_configuration.wheelRadius[wheelIndex];
+        stateBuffer.pendingNonSafety.wheelSpeed[wheelIndex] = wheelSpeedAngular;
+        stateBuffer.pendingNonSafety.wheelTicksTimestamp[wheelIndex] = frame.timestamp_us;
+        validWheelCount++;
     }
     
-    if (allWheelsValid) {
+    // Update metadata if at least 2 wheels are valid (for redundancy)
+    if (validWheelCount >= 2) {
+        stateBuffer.lastWheelSpeedUpdate = frame.timestamp_us;
+        stateBuffer.hasWheelSpeeds = true;
         m_diagnostics->wheelSpeedMessagesReceived.fetch_add(1);
         m_diagnostics->lastWheelSpeedMessageTimestamp.store(frame.timestamp_us);
+        return true;
     }
     
-    return allWheelsValid;
+    return false;
 }
+
+
 
 bool SygnalPomoParser::processGearPositionMessage(const dwCANMessage& frame)
 {
@@ -337,59 +322,352 @@ bool SygnalPomoParser::processYawRateMessage(const dwCANMessage& frame)
 
 
 
-bool SygnalPomoParser::getTemporallySynchronizedState(dwVehicleIOSafetyState* safetyState, 
-                                                     dwVehicleIONonSafetyState* nonSafetyState)
+void SygnalPomoParser::getCurrentState(
+    dwVehicleIOSafetyState* safetyState,
+    dwVehicleIONonSafetyState* nonSafetyState,
+    dwVehicleIOActuationFeedback* actuationFeedback)
 {
+    std::lock_guard<std::mutex> lock(m_vehicleState->stateMutex);
+    auto& buffer = m_vehicleState->stateBuffer;
+    
+    // ===========================================
+    // POPULATE SAFETY STATE
+    // ===========================================
+    if (safetyState) {
+        *safetyState = buffer.pendingSafety;
+        safetyState->size = sizeof(dwVehicleIOSafetyState);
+        
+        // Use most recent timestamp available
+        if (buffer.lastSteeringUpdate > 0) {
+            safetyState->timestamp_us = buffer.lastSteeringUpdate;
+        }
+
+        // Initialize all validity fields to "never received"
+        memset(&safetyState->validityInfo, 0, sizeof(safetyState->validityInfo));
+
+        // Mark steeringWheelAngle as valid if we have a steering update
+        if (buffer.hasSteering && safetyState->timestamp_us > 0) {
+            dwSignal_encodeSignalValidity(
+                &safetyState->validityInfo.steeringWheelAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+    }
+    
+    // ===========================================
+    // POPULATE NON-SAFETY STATE
+    // ===========================================
+    if (nonSafetyState) {
+        *nonSafetyState = buffer.pendingNonSafety;
+        nonSafetyState->size = sizeof(dwVehicleIONonSafetyState);
+        
+        // Use most recent timestamp from any source
+        dwTime_t latestTimestamp = std::max({
+            buffer.lastSpeedUpdate,
+            buffer.lastSteeringUpdate,
+            buffer.lastWheelSpeedUpdate
+        });
+        nonSafetyState->timestamp_us = latestTimestamp;
+        
+        // Apply velocity factor
+        nonSafetyState->speedESC *= m_configuration.velocityFactor;
+        
+        // Preserve individual sensor timestamps
+        nonSafetyState->speedESCTimestamp = buffer.lastSpeedUpdate;
+        nonSafetyState->frontSteeringTimestamp = buffer.lastSteeringUpdate;
+        for (int i = 0; i < 4; i++) {
+            nonSafetyState->wheelTicksTimestamp[i] = buffer.lastWheelSpeedUpdate;
+        }
+        
+        // Initialize all validity fields to "never received"
+        memset(&nonSafetyState->validityInfo, 0, sizeof(nonSafetyState->validityInfo));
+
+        // Mark speedESC valid if we have a recent speed update
+        if (buffer.hasSpeed && buffer.lastSpeedUpdate > 0) {
+            dwSignal_encodeSignalValidity(
+                &nonSafetyState->validityInfo.speedESC,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark frontSteeringAngle valid if we have a recent steering update
+        if (buffer.hasSteering && buffer.lastSteeringUpdate > 0) {
+            dwSignal_encodeSignalValidity(
+                &nonSafetyState->validityInfo.frontSteeringAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark wheelSpeed/ wheelTicks for each wheel valid if we have wheel speeds
+        if (buffer.hasWheelSpeeds && buffer.lastWheelSpeedUpdate > 0) {
+            for (int i = 0; i < 4; ++i) {
+                dwSignal_encodeSignalValidity(
+                    &nonSafetyState->validityInfo.wheelSpeed[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+                dwSignal_encodeSignalValidity(
+                    &nonSafetyState->validityInfo.wheelTicksTimestamp[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+            }
+        }
+
+        // Set quality enums (unchanged)
+        nonSafetyState->speedQualityESC = DW_VIO_SPEED_QUALITY_E_S_C_SIG_DEF;
+        nonSafetyState->frontSteeringAngleQuality = DW_VIO_FRONT_STEERING_ANGLE_QUALITY_INIT;
+        
+        for (int i = 0; i < 4; i++) {
+            nonSafetyState->wheelSpeedQuality[i] = DW_VIO_WHEEL_SPEED_QUALITY_SIG_DEF;
+            nonSafetyState->wheelTicksDirection[i] = 
+                (nonSafetyState->speedDirectionESC == DW_VIO_SPEED_DIRECTION_E_S_C_BACKWARD)
+                    ? DW_VIO_WHEEL_TICKS_DIRECTION_BACKWARD
+                    : DW_VIO_WHEEL_TICKS_DIRECTION_FORWARD;
+        }
+        
+        // Set vehicle stopped status
+        nonSafetyState->vehicleStopped = (nonSafetyState->speedESC < 0.1f) 
+            ? DW_VIO_VEHICLE_STOPPED_TRUE 
+            : DW_VIO_VEHICLE_STOPPED_FALSE;
+    }
+    
+    // ===========================================
+    // POPULATE ACTUATION FEEDBACK
+    // ===========================================
+    if (actuationFeedback) {
+        memset(actuationFeedback, 0, sizeof(dwVehicleIOActuationFeedback));
+        actuationFeedback->size = sizeof(dwVehicleIOActuationFeedback);
+        
+        dwTime_t latestTimestamp = std::max({
+            buffer.lastSpeedUpdate,
+            buffer.lastSteeringUpdate,
+            buffer.lastWheelSpeedUpdate
+        });
+        actuationFeedback->timestamp_us = latestTimestamp;
+        
+        // Copy speed data
+        actuationFeedback->speedESC = buffer.pendingNonSafety.speedESC * m_configuration.velocityFactor;
+        actuationFeedback->speedDirectionESC = buffer.pendingNonSafety.speedDirectionESC;
+        actuationFeedback->speedESCTimestamp = buffer.lastSpeedUpdate;
+        actuationFeedback->speedQualityESC = DW_VIO_SPEED_QUALITY_E_S_C_SIG_DEF;
+        
+        // Copy steering data
+        actuationFeedback->steeringWheelAngle = buffer.pendingSafety.steeringWheelAngle;
+        actuationFeedback->frontSteeringAngle = buffer.pendingNonSafety.frontSteeringAngle;
+        actuationFeedback->frontSteeringTimestamp = buffer.lastSteeringUpdate;
+        
+        // Copy wheel data
+        for (int i = 0; i < 4; i++) {
+            actuationFeedback->wheelSpeed[i] = buffer.pendingNonSafety.wheelSpeed[i];
+            actuationFeedback->wheelTicksTimestamp[i] = buffer.lastWheelSpeedUpdate;
+        }
+        
+        // Copy gear
+        actuationFeedback->drivePositionStatus = buffer.pendingNonSafety.drivePositionStatus;
+        
+        // Copy vehicle stopped status
+        actuationFeedback->vehicleStopped = (actuationFeedback->speedESC < 0.1f) 
+            ? DW_VIO_VEHICLE_STOPPED_TRUE 
+            : DW_VIO_VEHICLE_STOPPED_FALSE;
+    }
+}
+
+
+bool SygnalPomoParser::getTemporallySynchronizedState(
+    dwVehicleIOSafetyState* safetyState, 
+    dwVehicleIONonSafetyState* nonSafetyState,
+    dwVehicleIOActuationFeedback* actuationFeedback)
+{
+    static uint32_t callCount = 0;
+    ++callCount;
+    
     if (!safetyState || !nonSafetyState) {
+        fprintf(stderr, "     [CAN #%u] NULL pointer, returning false\n", callCount);
+        fflush(stderr);
         return false;
     }
-
+    
     std::lock_guard<std::mutex> lock(m_vehicleState->stateMutex);
     
-    // Check if we have a complete, temporally coherent state
-    if (!m_vehicleState->isStateComplete()) {
-        return false;
-    }
-
-    // Use current system time as reference for temporal coherency
-    dwTime_t currentTime = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    // 1. Check state completeness
+    bool stateComplete = m_vehicleState->isStateComplete();
     
-    if (!m_vehicleState->isTemporallyCoherent(currentTime, m_configuration.temporalWindow_us)) {
+    if (!stateComplete) {
         return false;
     }
-
-    // Apply latency compensation
-    auto compensatedNonSafety = m_vehicleState->stateBuffer.pendingNonSafety;
-    applyLatencyCompensation(compensatedNonSafety, currentTime);
-
-    // Preserve original CAN timestamps (critical for egomotion)
-    compensatedNonSafety.timestamp_us = m_vehicleState->stateBuffer.lastSpeedUpdate;
-    m_vehicleState->stateBuffer.pendingSafety.timestamp_us = m_vehicleState->stateBuffer.lastSteeringUpdate;
-
-    // Return synchronized states
+    
+    // 2. Choose SINGLE reference timestamp (most recent sensor)
+    dwTime_t referenceTime = std::max({
+        m_vehicleState->stateBuffer.lastSpeedUpdate,
+        m_vehicleState->stateBuffer.lastSteeringUpdate,
+        m_vehicleState->stateBuffer.lastWheelSpeedUpdate
+    });
+    
+    
+    // 3. Check temporal coherency
+    bool temporallyCoherent = m_vehicleState->isTemporallyCoherent(
+        referenceTime, 
+        m_configuration.temporalWindow_us, 
+        false);
+    
+    if (!temporallyCoherent) {
+        return false;
+    }
+    
+    // ===========================================
+    // POPULATE SAFETY STATE
+    // ===========================================
     *safetyState = m_vehicleState->stateBuffer.pendingSafety;
-    *nonSafetyState = compensatedNonSafety;
+    safetyState->size = sizeof(dwVehicleIOSafetyState);
+    safetyState->timestamp_us = referenceTime;  //  SYNCHRONIZED timestamp
+    
+    //  Clear and set validity flags (validityInfo is a struct, use memset)
+    memset(&safetyState->validityInfo, 0, sizeof(safetyState->validityInfo));
+    // Note: Individual validity flags would be set here if we knew the struct layout
+    // For now, the pendingSafety already has the data, egomotion will check actual values
+    
+    //  Set sequence ID
+    static uint32_t sequenceId = 0;
+    safetyState->sequenceId = ++sequenceId;
+    
+    // ===========================================
+    // POPULATE NON-SAFETY STATE
+    // ===========================================
+    *nonSafetyState = m_vehicleState->stateBuffer.pendingNonSafety;
+    nonSafetyState->size = sizeof(dwVehicleIONonSafetyState);
+    nonSafetyState->timestamp_us = referenceTime;  //  SYNCHRONIZED timestamp (SAME as safety!)
+    
+    //  Apply velocity factor compensation
+    nonSafetyState->speedESC *= m_configuration.velocityFactor;
+    
+    //  CRITICAL: Preserve individual sensor timestamps
+    nonSafetyState->speedESCTimestamp = m_vehicleState->stateBuffer.lastSpeedUpdate;
+    nonSafetyState->frontSteeringTimestamp = m_vehicleState->stateBuffer.lastSteeringUpdate;
+    for (int i = 0; i < 4; i++) {
+        nonSafetyState->wheelTicksTimestamp[i] = m_vehicleState->stateBuffer.lastWheelSpeedUpdate;
+    }
+    
+    //  Clear validity flags (validityInfo is a struct)
+    memset(&nonSafetyState->validityInfo, 0, sizeof(nonSafetyState->validityInfo));
+    // Egomotion will check the actual data values and their timestamps
+    
+    //  Set quality enums using correct enum names from headers
+    nonSafetyState->speedQualityESC = DW_VIO_SPEED_QUALITY_E_S_C_SIG_DEF;
+    nonSafetyState->frontSteeringAngleQuality = DW_VIO_FRONT_STEERING_ANGLE_QUALITY_INIT;
+    
+    //  Set wheel speed quality and direction for ALL wheels
+    dwVioWheelTicksDirection wheelDirection;
+    if (nonSafetyState->speedDirectionESC == DW_VIO_SPEED_DIRECTION_E_S_C_FORWARD) {
+        wheelDirection = DW_VIO_WHEEL_TICKS_DIRECTION_FORWARD;
+    } else if (nonSafetyState->speedDirectionESC == DW_VIO_SPEED_DIRECTION_E_S_C_BACKWARD) {
+        wheelDirection = DW_VIO_WHEEL_TICKS_DIRECTION_BACKWARD;
+    } else {
+        wheelDirection = DW_VIO_WHEEL_TICKS_DIRECTION_FORWARD;  // Default to forward if undefined
+    }
+    
+    for (int i = 0; i < 4; i++) {
+        nonSafetyState->wheelSpeedQuality[i] = DW_VIO_WHEEL_SPEED_QUALITY_SIG_DEF;
+        nonSafetyState->wheelTicksDirection[i] = wheelDirection;
+    }
+    
+    //  Set vehicle stopped status using correct enum names
+    nonSafetyState->vehicleStopped = (nonSafetyState->speedESC < 0.1f) 
+        ? DW_VIO_VEHICLE_STOPPED_TRUE 
+        : DW_VIO_VEHICLE_STOPPED_FALSE;
+    //  Set sequence ID (same as safety state)
+    nonSafetyState->sequenceId = sequenceId;
+    
+    // ===========================================
+    // POPULATE ACTUATION FEEDBACK
+    // ===========================================
+    if (actuationFeedback) {
+        *actuationFeedback = {};
+        actuationFeedback->size = sizeof(dwVehicleIOActuationFeedback);
+        actuationFeedback->timestamp_us = referenceTime;  //  SYNCHRONIZED timestamp (SAME!)
+        
+        // Copy wheel data
+        for (int i = 0; i < 4; i++) {
+            actuationFeedback->wheelSpeed[i] = nonSafetyState->wheelSpeed[i];
+            actuationFeedback->wheelTicksTimestamp[i] = nonSafetyState->wheelTicksTimestamp[i];
+        }
+        
+        // Copy steering data
+        actuationFeedback->steeringWheelAngle = safetyState->steeringWheelAngle;
+        actuationFeedback->frontSteeringAngle = nonSafetyState->frontSteeringAngle;
+        actuationFeedback->frontSteeringTimestamp = nonSafetyState->frontSteeringTimestamp;
+        
+        // Copy speed data
+        actuationFeedback->speedESC = nonSafetyState->speedESC;
+        actuationFeedback->speedDirectionESC = nonSafetyState->speedDirectionESC;
+        actuationFeedback->speedESCTimestamp = nonSafetyState->speedESCTimestamp;  //  CRITICAL!
+        actuationFeedback->speedQualityESC = nonSafetyState->speedQualityESC;
+        
+        // Copy gear
+        actuationFeedback->drivePositionStatus = nonSafetyState->drivePositionStatus;
+        
+        // Copy vehicle stopped status
+        actuationFeedback->vehicleStopped = nonSafetyState->vehicleStopped;
+        
+        // Initialize validity flags for actuation feedback
+        memset(&actuationFeedback->validityInfo, 0, sizeof(actuationFeedback->validityInfo));
 
+        // Mark speedESC valid if we have speed
+        if (nonSafetyState->speedESCTimestamp > 0) {
+            dwSignal_encodeSignalValidity(
+                &actuationFeedback->validityInfo.speedESC,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark steering signals valid if we have steering
+        if (nonSafetyState->frontSteeringTimestamp > 0) {
+            dwSignal_encodeSignalValidity(
+                &actuationFeedback->validityInfo.steeringWheelAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+            dwSignal_encodeSignalValidity(
+                &actuationFeedback->validityInfo.frontSteeringAngle,
+                DW_SIGNAL_STATUS_LAST_VALID,
+                DW_SIGNAL_TIMEOUT_NONE,
+                DW_SIGNAL_E2E_NO_ERROR);
+        }
+
+        // Mark wheel speeds valid if we have wheel speed timestamps
+        if (nonSafetyState->wheelTicksTimestamp[0] > 0 ||
+            nonSafetyState->wheelTicksTimestamp[1] > 0 ||
+            nonSafetyState->wheelTicksTimestamp[2] > 0 ||
+            nonSafetyState->wheelTicksTimestamp[3] > 0) {
+            for (int i = 0; i < 4; ++i) {
+                dwSignal_encodeSignalValidity(
+                    &actuationFeedback->validityInfo.wheelSpeed[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+                dwSignal_encodeSignalValidity(
+                    &actuationFeedback->validityInfo.wheelTicksTimestamp[i],
+                    DW_SIGNAL_STATUS_LAST_VALID,
+                    DW_SIGNAL_TIMEOUT_NONE,
+                    DW_SIGNAL_E2E_NO_ERROR);
+            }
+        }
+        
+        //  Set sequence ID
+        actuationFeedback->sequenceId = sequenceId;
+    }
+    
     // Update diagnostics
     m_diagnostics->stateCommitsSuccessful.fetch_add(1);
-    m_diagnostics->lastStateCommitTimestamp.store(currentTime);
-
+    m_diagnostics->lastStateCommitTimestamp.store(referenceTime);
+    
     return true;
 }
 
-
-void SygnalPomoParser::applyLatencyCompensation(dwVehicleIONonSafetyState& state, dwTime_t referenceTime)
-{
-    // Apply velocity latency compensation
-    if (m_configuration.velocityLatencyCompensation_us > 0) {
-        // Simple velocity scaling based on configured factor
-        state.speedESC *= m_configuration.velocityFactor;
-        
-        // For future enhancement: velocity extrapolation using acceleration
-        // Would require storing previous velocity measurements and computing derivatives
-    }
-}
 
 dwVehicleIOSafetyState SygnalPomoParser::getSafetyState() const
 {
@@ -418,9 +696,9 @@ bool SygnalPomoParser::checkMessageTimeouts(dwTime_t currentTimestamp)
     if (speedTimeout != m_diagnostics->speedMessageTimeout.load()) {
         m_diagnostics->speedMessageTimeout.store(speedTimeout);
         if (speedTimeout) {
-            sprintf(buffer, "SPEED message timeout detected! Last message: %lu μs ago\n", 
+            /* sprintf(buffer, "SPEED message timeout detected! Last message: %lu μs ago\n", 
                     currentTimestamp - lastSpeed);
-            printColored(stdout, COLOR_RED, buffer);
+            printColored(stdout, COLOR_RED, buffer); */ 
             timeoutDetected = true;
         }
     }
@@ -431,15 +709,14 @@ bool SygnalPomoParser::checkMessageTimeouts(dwTime_t currentTimestamp)
     if (steeringTimeout != m_diagnostics->steeringMessageTimeout.load()) {
         m_diagnostics->steeringMessageTimeout.store(steeringTimeout);
         if (steeringTimeout) {
-            sprintf(buffer, "STEERING message timeout detected! Last message: %lu μs ago\n", 
+            /* sprintf(buffer, "STEERING message timeout detected! Last message: %lu μs ago\n", 
                     currentTimestamp - lastSteering);
-            printColored(stdout, COLOR_RED, buffer);
+            printColored(stdout, COLOR_RED, buffer); */ 
             timeoutDetected = true;
         }
     }
     
     // Check wheel speed message timeout (if required)
-    if (m_speedMeasurementType == DW_EGOMOTION_REAR_WHEEL_SPEED) {
         dwTime_t lastWheelSpeed = m_diagnostics->lastWheelSpeedMessageTimestamp.load();
         bool wheelSpeedTimeout = (lastWheelSpeed > 0) && (currentTimestamp - lastWheelSpeed > timeout);
         if (wheelSpeedTimeout != m_diagnostics->wheelSpeedMessageTimeout.load()) {
@@ -449,7 +726,6 @@ bool SygnalPomoParser::checkMessageTimeouts(dwTime_t currentTimestamp)
                 timeoutDetected = true;
             }
         }
-    }
     
     return timeoutDetected;
 }
@@ -526,7 +802,7 @@ bool SygnalPomoParser::validateConfiguration(const VehicleCANConfiguration& conf
         return false;
     }
     
-    if (config.temporalWindow_us <= 0 || config.temporalWindow_us > 50000 ) { // Max 1 second
+    if (config.temporalWindow_us <= 0 || config.temporalWindow_us > 1000000 ) { // Max 1 second
         return false;
     }
     
@@ -564,7 +840,7 @@ bool SygnalPomoParser::extractParametersFromRig(dwRigHandle_t rigConfig, const c
     // Real-time processing defaults
     m_configuration.velocityLatencyCompensation_us = 20000;  // 20ms
     m_configuration.velocityFactor = 1.0f;
-    m_configuration.temporalWindow_us = 8000;               // 8ms
+    m_configuration.temporalWindow_us = 500000;               // 8ms
     m_configuration.stateCommitInterval_us = 10000;          // 10ms
     
     log("SygnalPomoParser: Hyundai/Kia real-time configuration extracted\n");
@@ -621,30 +897,25 @@ float32_t SygnalPomoParser::extractSteeringWheelAngle(const uint8_t* data, uint8
     return 0.0f;
 }
 
-
 float32_t SygnalPomoParser::extractWheelSpeed(const uint8_t* data, uint8_t length, uint8_t wheelIndex)
 {
     if (length < 8 || wheelIndex > 3) return 0.0f;
-
+    
     const uint64_t u = pack_le64(data, length);
-
-    // DBC 14-bit method (validated): FL 0..13, FR 16..29, RL 32..45, RR 48..61
+    
+    // DBC @1+ = little-endian: FL 0|14, FR 16|14, RL 32|14, RR 48|14
     uint32_t raw = 0;
     switch (wheelIndex) {
-        case 0: raw = (u >>  0) & 0x3FFF; break; // FL
-        case 1: raw = (u >> 16) & 0x3FFF; break; // FR
-        case 2: raw = (u >> 32) & 0x3FFF; break; // RL
-        case 3: raw = (u >> 48) & 0x3FFF; break; // RR
+        case 0: raw = (u >>  0) & 0x3FFF; break;
+        case 1: raw = (u >> 16) & 0x3FFF; break;
+        case 2: raw = (u >> 32) & 0x3FFF; break;
+        case 3: raw = (u >> 48) & 0x3FFF; break;
     }
-
-    // Optional: treat reserved ‘invalid’ values as zero
+    
     if (raw == 0x3FFE || raw == 0x3FFF) return 0.0f;
-
-    const float kmh = raw * 0.03125f;   // 0.03125 km/h per LSB
-    return kmh / 3.6f;                  // m/s
+    
+    return (raw * 0.03125f) / 3.6f;  // km/h → m/s
 }
-
-
 
 dwVioDrivePositionStatus SygnalPomoParser::extractGearPosition(const uint8_t* data, uint8_t length)
 {
