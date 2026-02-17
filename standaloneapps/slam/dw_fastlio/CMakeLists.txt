@@ -25,10 +25,13 @@ message(STATUS "Architecture suffix: ${ARCH_SUFFIX}")
 # Fix Eigen/X11 conflict - undefine Success symbol that X11 defines
 # This will be applied via compiler flags to ensure it's defined before any includes
 
-# Explicitly include PCL directories
+# Explicitly include PCL and system directories
 include_directories(SYSTEM /usr/include/pcl-1.10)
 include_directories(SYSTEM /usr/include/eigen3)
 include_directories(SYSTEM /usr/include/vtk-7.1)
+# Needed so PCL can see Boost headers like boost/shared_ptr.hpp
+include_directories(SYSTEM /usr/include)
+include_directories(SYSTEM /usr/include)
 
 # Architecture-aware library directories
 if(ARCH STREQUAL "aarch64")
@@ -123,6 +126,29 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE DW_FASTLIO_USE_GRAPH_BACKEND=
 # Link libraries
 #----------------------------------------------------------------------------------------
 
+# PCL: use absolute libs for aarch64 so cross-linker finds them
+if(ARCH STREQUAL "aarch64")
+    set(PCL_LIBS
+        /usr/lib/aarch64-linux-gnu/libpcl_common.so
+        /usr/lib/aarch64-linux-gnu/libpcl_io.so
+        /usr/lib/aarch64-linux-gnu/libpcl_filters.so
+        /usr/lib/aarch64-linux-gnu/libpcl_kdtree.so
+        /usr/lib/aarch64-linux-gnu/libpcl_sample_consensus.so
+        /usr/lib/aarch64-linux-gnu/libpcl_search.so
+        /usr/lib/aarch64-linux-gnu/libpcl_registration.so
+    )
+else()
+    set(PCL_LIBS
+        pcl_common
+        pcl_io
+        pcl_filters
+        pcl_kdtree
+        pcl_sample_consensus
+        pcl_search
+        pcl_registration
+    )
+endif()
+
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
         # DriveWorks
@@ -130,11 +156,7 @@ target_link_libraries(${PROJECT_NAME}
         ${Driveworks_LIBRARIES}
         
         # PCL
-        pcl_common
-        pcl_io
-        pcl_filters
-        pcl_search
-        pcl_registration
+        ${PCL_LIBS}
         
         # G2O
         ${G2O_CORE_LIBRARY}
@@ -179,6 +201,18 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     # System
     pthread
 )
+
+#----------------------------------------------------------------------------------------
+# Linker options (relax shared library undefineds on aarch64)
+#----------------------------------------------------------------------------------------
+
+if(ARCH STREQUAL "aarch64")
+    # Allow undefined symbols in shared libraries at link time; they will be
+    # resolved on the target (Orin) where full dependency set is installed.
+    target_link_options(${PROJECT_NAME} PRIVATE
+        -Wl,--allow-shlib-undefined
+    )
+endif()
 
 #----------------------------------------------------------------------------------------
 # Compiler settings
