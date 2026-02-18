@@ -1,1 +1,3 @@
-./sample_dw_fastlio_slam     --lidar-protocol=lidar.socket     --lidar-params="device=VELO_VLP16,ip=192.168.1.150,port=2368,scan-frequency=10"     --imu-protocol=imu.novatel     --imu-params="connection-type=ethernet,ip=192.168.1.153,port=2000"     --voxel-size=0.2 2>&1 | grep "\[DWFastLIO\]" > /usr/local/slam_logs.txt
+sudo ./sample_dw_fastlio_slam \
+  --rig-file=/usr/local/driveworks-5.20/samples/src/sensors/slam/dw_fastlio/rig.json \
+  --voxel-size=0.2
