@@ -159,13 +159,7 @@ private:
 
     const dwSensorEvent* acquiredEvent = nullptr;
     
-    struct PendingCameraFrame {
-        dwImageHandle_t cudaImage;  // CUDA frame handle (not event pointer for safety)
-        dwTime_t timestamp;
-    };
-    std::deque<PendingCameraFrame> m_pendingCameraFrames;
-    std::mutex m_cameraQueueMutex;
-    static constexpr size_t MAX_PENDING_CAMERA_FRAMES = 5;    
+    std::atomic<bool> m_hasNewCameraFrame{false};    
 
     
     // ------------------------------------------------
@@ -634,8 +628,23 @@ private:
                 }
                 
                 case DW_SENSOR_CAMERA:
+                {
                     cameraCount++;
+                    // Copy to owned buffer BEFORE release - frame-derived image invalid after releaseAcquiredEvent
+                    // Use CUDA_RGBA to avoid NvSciImageDataBuffer errors on GMSL/VIBRANTE
+                    if (m_streamerInput2GL && m_convertedImageRGBA && acquiredEvent->numCamFrames > 0) {
+                        dwImageHandle_t nextFrame = DW_NULL_HANDLE;
+                        dwStatus camStatus = dwSensorCamera_getImage(&nextFrame, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, acquiredEvent->camFrames[0]);
+                        if (camStatus == DW_SUCCESS && nextFrame != DW_NULL_HANDLE) {
+                            dwStatus copyStatus = dwImage_copyConvert(m_convertedImageRGBA, nextFrame, m_context);
+                            if (copyStatus == DW_SUCCESS) {
+                                m_hasNewCameraFrame.store(true);
+                            }
+                            // nextFrame is event-owned; do NOT destroy - released with event
+                        }
+                    }
                     break;
+                }
                     
                 default:
                     break;
@@ -973,6 +982,7 @@ public:
             }
 
             // Initialize camera processing (if available)
+            // Use CUDA_RGBA directly - avoids NvSciImageDataBuffer errors on GMSL/VIBRANTE
             uint32_t cnt;
             dwSensorManager_getNumSensors(&cnt, DW_SENSOR_CAMERA, m_sensorManager);
             if (cnt == 1)
@@ -986,14 +996,13 @@ public:
                 dwImageProperties outputProperties{};
 
                 CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&cameraProperties, cameraSensor));
-                // Request CUDA RGBA format directly - no manual conversion needed
                 CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&outputProperties, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, cameraSensor));
 
                 std::cout << "Camera image with " << cameraProperties.resolution.x << "x"
                         << cameraProperties.resolution.y << " at " << cameraProperties.framerate << " FPS" << std::endl;
 
-                // Remove conversion image creation - not needed
-                m_streamerInput2GL.reset(new SimpleImageStreamerGL<>(outputProperties, 12, m_context));
+                CHECK_DW_ERROR(dwImage_create(&m_convertedImageRGBA, outputProperties, m_context));
+                m_streamerInput2GL.reset(new SimpleImageStreamerGL<>(outputProperties, 10000, m_context));
             }
 
             // Start sensor manager for real-time processing
@@ -1624,40 +1633,11 @@ public:
             lastRenderLog = now;
         }
         
-        // ========================================
-        // NEW: Process pending camera frames asynchronously
-        // This runs in the render thread where GL context is active
-        // ========================================
-        {
-            std::lock_guard<std::mutex> lock(m_cameraQueueMutex);
-            
-            // Process one camera frame per render cycle (if available and ready)
-            if (!m_pendingCameraFrames.empty() && m_lastGLFrame == DW_NULL_HANDLE) {
-                auto& pending = m_pendingCameraFrames.front();
-                
-                // GL streaming happens here (safe in render context, no time pressure)
-                m_lastGLFrame = m_streamerInput2GL->post(pending.cudaImage);
-                
-                // Destroy the CUDA image after streaming
-                dwImage_destroy(pending.cudaImage);
-                
-                m_pendingCameraFrames.pop_front();
-                m_shallRender = true;
-                
-                // DIAGNOSTIC: Track camera frame processing
-                static uint32_t processedFrames = 0;
-                static dwTime_t lastCameraLog = 0;
-                dwTime_t now = std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-                
-                if (++processedFrames % 30 == 0 || now - lastCameraLog > 5000000) {  // Every 30 frames or 5s
-                    char buf[256];
-                    sprintf(buf, "📷 Camera frames: %u processed, %lu queued\n", 
-                            processedFrames, m_pendingCameraFrames.size());
-                    printColored(stdout, COLOR_YELLOW, buf);
-                    lastCameraLog = now;
-                }
-            }
+        // Process new camera frame (owned buffer - safe across threads)
+        if (m_hasNewCameraFrame.load() && m_lastGLFrame == DW_NULL_HANDLE && m_streamerInput2GL && m_convertedImageRGBA) {
+            m_lastGLFrame = m_streamerInput2GL->post(m_convertedImageRGBA);
+            m_hasNewCameraFrame.store(false);
+            m_shallRender = true;
         }
         
         // ========================================
